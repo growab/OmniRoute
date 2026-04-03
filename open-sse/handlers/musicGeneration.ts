@@ -15,6 +15,7 @@
  */
 
 import { getMusicProvider, parseMusicModel } from "../config/musicRegistry.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
 import {
   submitComfyWorkflow,
   pollComfyResult,
@@ -26,7 +27,7 @@ import { saveCallLog } from "@/lib/usageDb";
 /**
  * Handle music generation request
  */
-export async function handleMusicGeneration({ body, credentials, log }) {
+export async function handleMusicGeneration({ body, credentials, log, proxyConfig = null }) {
   const { provider, model } = parseMusicModel(body.model);
 
   if (!provider) {
@@ -47,7 +48,14 @@ export async function handleMusicGeneration({ body, credentials, log }) {
   }
 
   if (providerConfig.format === "comfyui") {
-    return handleComfyUIMusicGeneration({ model, provider, providerConfig, body, log });
+    return handleComfyUIMusicGeneration({
+      model,
+      provider,
+      providerConfig,
+      body,
+      log,
+      proxyConfig,
+    });
   }
 
   return {
@@ -61,7 +69,14 @@ export async function handleMusicGeneration({ body, credentials, log }) {
  * Handle ComfyUI music generation
  * Submits an audio generation workflow (Stable Audio / MusicGen), polls, fetches output
  */
-async function handleComfyUIMusicGeneration({ model, provider, providerConfig, body, log }) {
+async function handleComfyUIMusicGeneration({
+  model,
+  provider,
+  providerConfig,
+  body,
+  log,
+  proxyConfig = null,
+}) {
   const startTime = Date.now();
   const duration = body.duration || 10; // seconds
 
@@ -120,8 +135,13 @@ async function handleComfyUIMusicGeneration({ model, provider, providerConfig, b
   }
 
   try {
-    const promptId = await submitComfyWorkflow(providerConfig.baseUrl, workflow);
-    const historyEntry = await pollComfyResult(providerConfig.baseUrl, promptId, 300_000);
+    const promptId = await submitComfyWorkflow(providerConfig.baseUrl, workflow, proxyConfig);
+    const historyEntry = await pollComfyResult(
+      providerConfig.baseUrl,
+      promptId,
+      300_000,
+      proxyConfig
+    );
     const outputFiles = extractComfyOutputFiles(historyEntry);
 
     const audioFiles = [];
@@ -130,7 +150,8 @@ async function handleComfyUIMusicGeneration({ model, provider, providerConfig, b
         providerConfig.baseUrl,
         file.filename,
         file.subfolder,
-        file.type
+        file.type,
+        proxyConfig
       );
       const base64 = Buffer.from(buffer).toString("base64");
       audioFiles.push({ b64_json: base64, format: "wav" });

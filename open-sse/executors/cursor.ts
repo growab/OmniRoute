@@ -27,6 +27,7 @@ import {
   parseConnectRPCFrame,
   extractTextFromResponse,
 } from "../utils/cursorProtobuf.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
 import { estimateUsage } from "../utils/usageTracking.ts";
 import { FORMATS } from "../translator/formats.ts";
 import crypto from "crypto";
@@ -286,14 +287,17 @@ export class CursorExecutor extends BaseExecutor {
     url: string,
     headers: Record<string, string>,
     body: Uint8Array,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    proxyConfig?: unknown
   ): Promise<CursorHttpResponse> {
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: body as unknown as BodyInit,
-      signal,
-    });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch(url, {
+        method: "POST",
+        headers,
+        body: body as unknown as BodyInit,
+        signal,
+      })
+    );
 
     return {
       status: response.status,
@@ -363,7 +367,16 @@ export class CursorExecutor extends BaseExecutor {
     });
   }
 
-  async execute({ model, body, stream, credentials, signal, log, upstreamExtraHeaders }) {
+  async execute({
+    model,
+    body,
+    stream,
+    credentials,
+    signal,
+    log,
+    upstreamExtraHeaders,
+    proxyConfig,
+  }) {
     const url = this.buildUrl();
     const headers = this.buildHeaders(credentials);
     mergeUpstreamExtraHeaders(headers, upstreamExtraHeaders);
@@ -372,7 +385,7 @@ export class CursorExecutor extends BaseExecutor {
     try {
       const response: CursorHttpResponse = http2
         ? await this.makeHttp2Request(url, headers, transformedBody, signal)
-        : await this.makeFetchRequest(url, headers, transformedBody, signal);
+        : await this.makeFetchRequest(url, headers, transformedBody, signal, proxyConfig);
 
       if (response.status !== 200) {
         const errorText = response.body?.toString() || "Unknown error";

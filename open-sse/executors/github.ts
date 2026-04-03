@@ -1,6 +1,7 @@
 import { BaseExecutor, ExecuteInput } from "./base.ts";
 import { PROVIDERS, OAUTH_ENDPOINTS } from "../config/constants.ts";
 import { getModelTargetFormat } from "../config/providerModels.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
 
 export class GithubExecutor extends BaseExecutor {
   constructor() {
@@ -149,17 +150,19 @@ export class GithubExecutor extends BaseExecutor {
     };
   }
 
-  async refreshCopilotToken(githubAccessToken, log) {
+  async refreshCopilotToken(githubAccessToken, log, proxyConfig = null) {
     try {
-      const response = await fetch("https://api.github.com/copilot_internal/v2/token", {
-        headers: {
-          Authorization: `token ${githubAccessToken}`,
-          "User-Agent": "GithubCopilot/1.0",
-          "Editor-Version": "vscode/1.110.0",
-          "Editor-Plugin-Version": "copilot/1.300.0",
-          Accept: "application/json",
-        },
-      });
+      const response = await runWithProxyContext(proxyConfig, () =>
+        fetch("https://api.github.com/copilot_internal/v2/token", {
+          headers: {
+            Authorization: `token ${githubAccessToken}`,
+            "User-Agent": "GithubCopilot/1.0",
+            "Editor-Version": "vscode/1.110.0",
+            "Editor-Plugin-Version": "copilot/1.300.0",
+            Accept: "application/json",
+          },
+        })
+      );
       if (!response.ok) return null;
       const data = await response.json();
       log?.info?.("TOKEN", "Copilot token refreshed");
@@ -170,21 +173,23 @@ export class GithubExecutor extends BaseExecutor {
     }
   }
 
-  async refreshGitHubToken(refreshToken, log) {
+  async refreshGitHubToken(refreshToken, log, proxyConfig = null) {
     try {
-      const response = await fetch(OAUTH_ENDPOINTS.github.token, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-        },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          refresh_token: refreshToken,
-          client_id: this.config.clientId,
-          client_secret: this.config.clientSecret,
-        }),
-      });
+      const response = await runWithProxyContext(proxyConfig, () =>
+        fetch(OAUTH_ENDPOINTS.github.token, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Accept: "application/json",
+          },
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: refreshToken,
+            client_id: this.config.clientId,
+            client_secret: this.config.clientSecret,
+          }),
+        })
+      );
       if (!response.ok) return null;
       const tokens = await response.json();
       log?.info?.("TOKEN", "GitHub token refreshed");
@@ -199,13 +204,17 @@ export class GithubExecutor extends BaseExecutor {
     }
   }
 
-  async refreshCredentials(credentials, log) {
-    let copilotResult = await this.refreshCopilotToken(credentials.accessToken, log);
+  async refreshCredentials(credentials, log, proxyConfig = null) {
+    let copilotResult = await this.refreshCopilotToken(credentials.accessToken, log, proxyConfig);
 
     if (!copilotResult && credentials.refreshToken) {
-      const githubTokens = await this.refreshGitHubToken(credentials.refreshToken, log);
+      const githubTokens = await this.refreshGitHubToken(
+        credentials.refreshToken,
+        log,
+        proxyConfig
+      );
       if (githubTokens?.accessToken) {
-        copilotResult = await this.refreshCopilotToken(githubTokens.accessToken, log);
+        copilotResult = await this.refreshCopilotToken(githubTokens.accessToken, log, proxyConfig);
         if (copilotResult) {
           return {
             ...githubTokens,

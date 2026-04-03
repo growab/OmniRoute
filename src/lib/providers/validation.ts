@@ -15,6 +15,7 @@ import {
   isOpenAICompatibleProvider,
 } from "@/shared/constants/providers";
 import { validateQoderCliPat } from "@omniroute/open-sse/services/qoderCli.ts";
+import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
 
 const OPENAI_LIKE_FORMATS = new Set(["openai", "openai-responses"]);
 const GEMINI_LIKE_FORMATS = new Set(["gemini", "gemini-cli"]);
@@ -94,7 +95,8 @@ async function validateOpenAILikeProvider({
   providerSpecificData = {},
   modelId = "gpt-4o-mini",
   modelsUrl: customModelsUrl,
-}) {
+  proxyConfig = null,
+}: any) {
   if (!baseUrl) {
     return { valid: false, error: "Missing base URL" };
   }
@@ -104,10 +106,12 @@ async function validateOpenAILikeProvider({
     return { valid: false, error: "Invalid models endpoint" };
   }
 
-  const modelsRes = await fetch(modelsUrl, {
-    method: "GET",
-    headers: buildBearerHeaders(apiKey),
-  });
+  const modelsRes = await runWithProxyContext(proxyConfig, () =>
+    fetch(modelsUrl, {
+      method: "GET",
+      headers: buildBearerHeaders(apiKey),
+    })
+  );
 
   if (modelsRes.ok) {
     return { valid: true, error: null };
@@ -130,11 +134,13 @@ async function validateOpenAILikeProvider({
     max_tokens: 1,
   };
 
-  const chatRes = await fetch(chatUrl, {
-    method: "POST",
-    headers: buildBearerHeaders(apiKey),
-    body: JSON.stringify(testBody),
-  });
+  const chatRes = await runWithProxyContext(proxyConfig, () =>
+    fetch(chatUrl, {
+      method: "POST",
+      headers: buildBearerHeaders(apiKey),
+      body: JSON.stringify(testBody),
+    })
+  );
 
   if (chatRes.ok) {
     return { valid: true, error: null };
@@ -162,6 +168,7 @@ async function validateAnthropicLikeProvider({
   modelId,
   headers = {},
   providerSpecificData = {},
+  proxyConfig = null,
 }: any) {
   if (!baseUrl) {
     return { valid: false, error: "Missing base URL" };
@@ -183,15 +190,17 @@ async function validateAnthropicLikeProvider({
   const testModelId =
     providerSpecificData?.validationModelId || modelId || "claude-3-5-sonnet-20241022";
 
-  const response = await fetch(baseUrl, {
-    method: "POST",
-    headers: requestHeaders,
-    body: JSON.stringify({
-      model: testModelId,
-      max_tokens: 1,
-      messages: [{ role: "user", content: "test" }],
-    }),
-  });
+  const response = await runWithProxyContext(proxyConfig, () =>
+    fetch(baseUrl, {
+      method: "POST",
+      headers: requestHeaders,
+      body: JSON.stringify({
+        model: testModelId,
+        max_tokens: 1,
+        messages: [{ role: "user", content: "test" }],
+      }),
+    })
+  );
 
   if (response.status === 401 || response.status === 403) {
     return { valid: false, error: "Invalid API key" };
@@ -200,16 +209,18 @@ async function validateAnthropicLikeProvider({
   return { valid: true, error: null };
 }
 
-async function validateGeminiLikeProvider({ apiKey, baseUrl }: any) {
+async function validateGeminiLikeProvider({ apiKey, baseUrl, proxyConfig = null }: any) {
   if (!baseUrl) {
     return { valid: false, error: "Missing base URL" };
   }
 
   const separator = baseUrl.includes("?") ? "&" : "?";
-  const response = await fetch(`${baseUrl}${separator}key=${encodeURIComponent(apiKey)}`, {
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
-  });
+  const response = await runWithProxyContext(proxyConfig, () =>
+    fetch(`${baseUrl}${separator}key=${encodeURIComponent(apiKey)}`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    })
+  );
 
   if (response.ok) {
     return { valid: true, error: null };
@@ -224,12 +235,14 @@ async function validateGeminiLikeProvider({ apiKey, baseUrl }: any) {
 
 // ── Specialty providers (non-standard APIs) ──
 
-async function validateDeepgramProvider({ apiKey }: any) {
+async function validateDeepgramProvider({ apiKey, proxyConfig = null }: any) {
   try {
-    const response = await fetch("https://api.deepgram.com/v1/auth/token", {
-      method: "GET",
-      headers: { Authorization: `Token ${apiKey}` },
-    });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch("https://api.deepgram.com/v1/auth/token", {
+        method: "GET",
+        headers: { Authorization: `Token ${apiKey}` },
+      })
+    );
     if (response.ok) return { valid: true, error: null };
     if (response.status === 401 || response.status === 403) {
       return { valid: false, error: "Invalid API key" };
@@ -240,15 +253,17 @@ async function validateDeepgramProvider({ apiKey }: any) {
   }
 }
 
-async function validateAssemblyAIProvider({ apiKey }: any) {
+async function validateAssemblyAIProvider({ apiKey, proxyConfig = null }: any) {
   try {
-    const response = await fetch("https://api.assemblyai.com/v2/transcript?limit=1", {
-      method: "GET",
-      headers: {
-        Authorization: apiKey,
-        "Content-Type": "application/json",
-      },
-    });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch("https://api.assemblyai.com/v2/transcript?limit=1", {
+        method: "GET",
+        headers: {
+          Authorization: apiKey,
+          "Content-Type": "application/json",
+        },
+      })
+    );
     if (response.ok) return { valid: true, error: null };
     if (response.status === 401 || response.status === 403) {
       return { valid: false, error: "Invalid API key" };
@@ -259,21 +274,23 @@ async function validateAssemblyAIProvider({ apiKey }: any) {
   }
 }
 
-async function validateNanoBananaProvider({ apiKey }: any) {
+async function validateNanoBananaProvider({ apiKey, proxyConfig = null }: any) {
   try {
     // NanoBanana doesn't expose a lightweight validation endpoint,
     // so we send a minimal generate request that will succeed or fail on auth.
-    const response = await fetch("https://api.nanobananaapi.ai/api/v1/nanobanana/generate", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        prompt: "test",
-        model: "nanobanana-flash",
-      }),
-    });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch("https://api.nanobananaapi.ai/api/v1/nanobanana/generate", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          prompt: "test",
+          model: "nanobanana-flash",
+        }),
+      })
+    );
     // Auth errors → 401/403; anything else (even 400 bad request) means auth passed
     if (response.status === 401 || response.status === 403) {
       return { valid: false, error: "Invalid API key" };
@@ -284,16 +301,18 @@ async function validateNanoBananaProvider({ apiKey }: any) {
   }
 }
 
-async function validateElevenLabsProvider({ apiKey }: any) {
+async function validateElevenLabsProvider({ apiKey, proxyConfig = null }: any) {
   try {
     // Lightweight auth check endpoint
-    const response = await fetch("https://api.elevenlabs.io/v1/voices", {
-      method: "GET",
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-      },
-    });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch("https://api.elevenlabs.io/v1/voices", {
+        method: "GET",
+        headers: {
+          "xi-api-key": apiKey,
+          "Content-Type": "application/json",
+        },
+      })
+    );
 
     if (response.ok) return { valid: true, error: null };
     if (response.status === 401 || response.status === 403) {
@@ -306,22 +325,24 @@ async function validateElevenLabsProvider({ apiKey }: any) {
   }
 }
 
-async function validateInworldProvider({ apiKey }: any) {
+async function validateInworldProvider({ apiKey, proxyConfig = null }: any) {
   try {
     // Inworld TTS lacks a simple key-introspection endpoint.
     // Send a minimal synth request and treat non-auth 4xx as auth-pass.
-    const response = await fetch("https://api.inworld.ai/tts/v1/voice", {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        text: "test",
-        modelId: "inworld-tts-1.5-mini",
-        audioConfig: { audioEncoding: "MP3" },
-      }),
-    });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch("https://api.inworld.ai/tts/v1/voice", {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: "test",
+          modelId: "inworld-tts-1.5-mini",
+          audioConfig: { audioEncoding: "MP3" },
+        }),
+      })
+    );
 
     if (response.status === 401 || response.status === 403) {
       return { valid: false, error: "Invalid API key" };
@@ -334,7 +355,11 @@ async function validateInworldProvider({ apiKey }: any) {
   }
 }
 
-async function validateBailianCodingPlanProvider({ apiKey, providerSpecificData = {} }: any) {
+async function validateBailianCodingPlanProvider({
+  apiKey,
+  providerSpecificData = {},
+  proxyConfig = null,
+}: any) {
   try {
     const rawBaseUrl =
       normalizeBaseUrl(providerSpecificData.baseUrl) ||
@@ -346,19 +371,21 @@ async function validateBailianCodingPlanProvider({ apiKey, providerSpecificData 
     // It does NOT expose /v1/models — use messages probe directly
     const messagesUrl = `${baseUrl}/messages`;
 
-    const response = await fetch(messagesUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "qwen3-coder-plus",
-        max_tokens: 1,
-        messages: [{ role: "user", content: "test" }],
-      }),
-    });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch(messagesUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "qwen3-coder-plus",
+          max_tokens: 1,
+          messages: [{ role: "user", content: "test" }],
+        }),
+      })
+    );
 
     // 401/403 => invalid key
     if (response.status === 401 || response.status === 403) {
@@ -380,7 +407,11 @@ async function validateBailianCodingPlanProvider({ apiKey, providerSpecificData 
   }
 }
 
-async function validateOpenAICompatibleProvider({ apiKey, providerSpecificData = {} }: any) {
+async function validateOpenAICompatibleProvider({
+  apiKey,
+  providerSpecificData = {},
+  proxyConfig = null,
+}: any) {
   const baseUrl = normalizeBaseUrl(providerSpecificData.baseUrl);
   if (!baseUrl) {
     return { valid: false, error: "No base URL configured for OpenAI compatible provider" };
@@ -394,10 +425,12 @@ async function validateOpenAICompatibleProvider({ apiKey, providerSpecificData =
   // Step 1: Try GET /models
   let modelsReachable = false;
   try {
-    const modelsRes = await fetch(`${baseUrl}/models`, {
-      method: "GET",
-      headers: buildBearerHeaders(apiKey),
-    });
+    const modelsRes = await runWithProxyContext(proxyConfig, () =>
+      fetch(`${baseUrl}/models`, {
+        method: "GET",
+        headers: buildBearerHeaders(apiKey),
+      })
+    );
 
     modelsReachable = true;
 
@@ -439,15 +472,17 @@ async function validateOpenAICompatibleProvider({ apiKey, providerSpecificData =
   const testModelId = validationModelId;
 
   try {
-    const chatRes = await fetch(chatUrl, {
-      method: "POST",
-      headers: buildBearerHeaders(apiKey),
-      body: JSON.stringify({
-        model: testModelId,
-        messages: [{ role: "user", content: "test" }],
-        max_tokens: 1,
-      }),
-    });
+    const chatRes = await runWithProxyContext(proxyConfig, () =>
+      fetch(chatUrl, {
+        method: "POST",
+        headers: buildBearerHeaders(apiKey),
+        body: JSON.stringify({
+          model: testModelId,
+          messages: [{ role: "user", content: "test" }],
+          max_tokens: 1,
+        }),
+      })
+    );
 
     if (chatRes.ok) {
       return { valid: true, error: null, method: "chat_completions" };
@@ -501,11 +536,13 @@ async function validateOpenAICompatibleProvider({ apiKey, providerSpecificData =
   }
 
   try {
-    const pingRes = await fetch(baseUrl, {
-      method: "GET",
-      headers: buildBearerHeaders(apiKey),
-      signal: AbortSignal.timeout(5000),
-    });
+    const pingRes = await runWithProxyContext(proxyConfig, () =>
+      fetch(baseUrl, {
+        method: "GET",
+        headers: buildBearerHeaders(apiKey),
+        signal: AbortSignal.timeout(5000),
+      })
+    );
 
     // If the server responds at all (even with an error page), it's reachable
     if (pingRes.status < 500) {
@@ -518,7 +555,11 @@ async function validateOpenAICompatibleProvider({ apiKey, providerSpecificData =
   }
 }
 
-async function validateAnthropicCompatibleProvider({ apiKey, providerSpecificData = {} }: any) {
+async function validateAnthropicCompatibleProvider({
+  apiKey,
+  providerSpecificData = {},
+  proxyConfig = null,
+}: any) {
   let baseUrl = normalizeAnthropicBaseUrl(providerSpecificData.baseUrl);
   if (!baseUrl) {
     return { valid: false, error: "No base URL configured for Anthropic compatible provider" };
@@ -533,12 +574,11 @@ async function validateAnthropicCompatibleProvider({ apiKey, providerSpecificDat
 
   // Step 1: Try GET /models
   try {
-    const modelsRes = await fetch(
-      joinBaseUrlAndPath(baseUrl, providerSpecificData?.modelsPath || "/models"),
-      {
+    const modelsRes = await runWithProxyContext(proxyConfig, () =>
+      fetch(joinBaseUrlAndPath(baseUrl, providerSpecificData?.modelsPath || "/models"), {
         method: "GET",
         headers,
-      }
+      })
     );
 
     if (modelsRes.ok) {
@@ -555,9 +595,8 @@ async function validateAnthropicCompatibleProvider({ apiKey, providerSpecificDat
   // Step 2: Fallback — try a minimal messages request
   const testModelId = providerSpecificData?.validationModelId || "claude-3-5-sonnet-20241022";
   try {
-    const messagesRes = await fetch(
-      joinBaseUrlAndPath(baseUrl, providerSpecificData?.chatPath || "/messages"),
-      {
+    const messagesRes = await runWithProxyContext(proxyConfig, () =>
+      fetch(joinBaseUrlAndPath(baseUrl, providerSpecificData?.chatPath || "/messages"), {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -565,7 +604,7 @@ async function validateAnthropicCompatibleProvider({ apiKey, providerSpecificDat
           max_tokens: 1,
           messages: [{ role: "user", content: "test" }],
         }),
-      }
+      })
     );
 
     if (messagesRes.status === 401 || messagesRes.status === 403) {
@@ -582,6 +621,7 @@ async function validateAnthropicCompatibleProvider({ apiKey, providerSpecificDat
 export async function validateClaudeCodeCompatibleProvider({
   apiKey,
   providerSpecificData = {},
+  proxyConfig = null,
 }: any) {
   const baseUrl = normalizeClaudeCodeCompatibleBaseUrl(providerSpecificData.baseUrl);
   if (!baseUrl) {
@@ -593,10 +633,12 @@ export async function validateClaudeCodeCompatibleProvider({
   const defaultHeaders = buildClaudeCodeCompatibleHeaders(apiKey, false);
 
   try {
-    const modelsRes = await fetch(joinClaudeCodeCompatibleUrl(baseUrl, modelsPath), {
-      method: "GET",
-      headers: defaultHeaders,
-    });
+    const modelsRes = await runWithProxyContext(proxyConfig, () =>
+      fetch(joinClaudeCodeCompatibleUrl(baseUrl, modelsPath), {
+        method: "GET",
+        headers: defaultHeaders,
+      })
+    );
 
     if (modelsRes.ok) {
       return { valid: true, error: null, method: "models_endpoint" };
@@ -615,11 +657,13 @@ export async function validateClaudeCodeCompatibleProvider({
   const sessionId = JSON.parse(payload.metadata.user_id).session_id;
 
   try {
-    const messagesRes = await fetch(joinClaudeCodeCompatibleUrl(baseUrl, chatPath), {
-      method: "POST",
-      headers: buildClaudeCodeCompatibleHeaders(apiKey, true, sessionId),
-      body: JSON.stringify(payload),
-    });
+    const messagesRes = await runWithProxyContext(proxyConfig, () =>
+      fetch(joinClaudeCodeCompatibleUrl(baseUrl, chatPath), {
+        method: "POST",
+        headers: buildClaudeCodeCompatibleHeaders(apiKey, true, sessionId),
+        body: JSON.stringify(payload),
+      })
+    );
 
     if (messagesRes.status === 401 || messagesRes.status === 403) {
       return { valid: false, error: "Invalid API key" };
@@ -657,10 +701,11 @@ export async function validateClaudeCodeCompatibleProvider({
 
 async function validateSearchProvider(
   url: string,
-  init: RequestInit
+  init: RequestInit,
+  proxyConfig: any = null
 ): Promise<{ valid: boolean; error: string | null; unsupported: false }> {
   try {
-    const response = await fetch(url, init);
+    const response = await runWithProxyContext(proxyConfig, () => fetch(url, init));
     if (response.ok) return { valid: true, error: null, unsupported: false };
     if (response.status === 401 || response.status === 403) {
       return { valid: false, error: "Invalid API key", unsupported: false };
@@ -722,14 +767,19 @@ const SEARCH_VALIDATOR_CONFIGS: Record<
   }),
 };
 
-export async function validateProviderApiKey({ provider, apiKey, providerSpecificData = {} }: any) {
+export async function validateProviderApiKey({
+  provider,
+  apiKey,
+  providerSpecificData = {},
+  proxyConfig = null,
+}: any) {
   if (!provider || !apiKey) {
     return { valid: false, error: "Provider and API key required", unsupported: false };
   }
 
   if (isOpenAICompatibleProvider(provider)) {
     try {
-      return await validateOpenAICompatibleProvider({ apiKey, providerSpecificData });
+      return await validateOpenAICompatibleProvider({ apiKey, providerSpecificData, proxyConfig });
     } catch (error: any) {
       return { valid: false, error: error.message || "Validation failed", unsupported: false };
     }
@@ -738,9 +788,17 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
   if (isAnthropicCompatibleProvider(provider)) {
     try {
       if (isClaudeCodeCompatibleProvider(provider)) {
-        return await validateClaudeCodeCompatibleProvider({ apiKey, providerSpecificData });
+        return await validateClaudeCodeCompatibleProvider({
+          apiKey,
+          providerSpecificData,
+          proxyConfig,
+        });
       }
-      return await validateAnthropicCompatibleProvider({ apiKey, providerSpecificData });
+      return await validateAnthropicCompatibleProvider({
+        apiKey,
+        providerSpecificData,
+        proxyConfig,
+      });
     } catch (error: any) {
       return { valid: false, error: error.message || "Validation failed", unsupported: false };
     }
@@ -757,17 +815,19 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
     inworld: validateInworldProvider,
     "bailian-coding-plan": validateBailianCodingPlanProvider,
     // LongCat AI — does not expose /v1/models; validate via chat completions directly (#592)
-    longcat: async ({ apiKey }: any) => {
+    longcat: async ({ apiKey, proxyConfig = null }: any) => {
       try {
-        const res = await fetch("https://api.longcat.chat/openai/v1/chat/completions", {
-          method: "POST",
-          headers: buildBearerHeaders(apiKey),
-          body: JSON.stringify({
-            model: "longcat",
-            messages: [{ role: "user", content: "test" }],
-            max_tokens: 1,
-          }),
-        });
+        const res = await runWithProxyContext(proxyConfig, () =>
+          fetch("https://api.longcat.chat/openai/v1/chat/completions", {
+            method: "POST",
+            headers: buildBearerHeaders(apiKey),
+            body: JSON.stringify({
+              model: "longcat",
+              messages: [{ role: "user", content: "test" }],
+              max_tokens: 1,
+            }),
+          })
+        );
         if (res.status === 401 || res.status === 403) {
           return { valid: false, error: "Invalid API key" };
         }
@@ -781,9 +841,9 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
     ...Object.fromEntries(
       Object.entries(SEARCH_VALIDATOR_CONFIGS).map(([id, configFn]) => [
         id,
-        ({ apiKey }: any) => {
+        ({ apiKey, proxyConfig = null }: any) => {
           const { url, init } = configFn(apiKey);
-          return validateSearchProvider(url, init);
+          return validateSearchProvider(url, init, proxyConfig);
         },
       ])
     ),
@@ -791,7 +851,7 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
 
   if (SPECIALTY_VALIDATORS[provider]) {
     try {
-      return await SPECIALTY_VALIDATORS[provider]({ apiKey, providerSpecificData });
+      return await SPECIALTY_VALIDATORS[provider]({ apiKey, providerSpecificData, proxyConfig });
     } catch (error: any) {
       return { valid: false, error: error.message || "Validation failed", unsupported: false };
     }
@@ -819,6 +879,7 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
         providerSpecificData,
         modelId,
         modelsUrl: entry.modelsUrl,
+        proxyConfig,
       });
     }
 
@@ -840,6 +901,7 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
         modelId,
         headers: requestHeaders,
         providerSpecificData,
+        proxyConfig,
       });
     }
 
@@ -847,6 +909,7 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
       return await validateGeminiLikeProvider({
         apiKey,
         baseUrl,
+        proxyConfig,
       });
     }
 

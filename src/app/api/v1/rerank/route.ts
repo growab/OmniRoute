@@ -12,7 +12,8 @@ import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
 import { v1RerankSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
-import { getProviderNodes } from "@/lib/localDb";
+import { getProviderNodes, resolveProxyForProvider } from "@/lib/localDb";
+import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
 
 /**
  * Handle CORS preflight
@@ -117,6 +118,7 @@ export async function POST(request) {
       return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
     }
 
+    const proxyConfig = await resolveProxyForProvider(provider);
     const response = await handleRerank({
       model: body.model,
       query: body.query,
@@ -124,6 +126,7 @@ export async function POST(request) {
       top_n: body.top_n,
       return_documents: body.return_documents,
       credentials,
+      proxyConfig,
     });
     if (response?.ok) {
       await clearRecoveredProviderState(credentials);
@@ -147,22 +150,25 @@ export async function POST(request) {
         );
       }
 
+      const proxyConfig = await resolveProxyForProvider(localProvider.providerId);
       const token = credentials?.apiKey || credentials?.accessToken;
       try {
-        const res = await fetch(localProvider.baseUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            model: localModel,
-            query: body.query,
-            documents: body.documents,
-            top_n: body.top_n || body.documents.length,
-            return_documents: body.return_documents !== false,
-          }),
-        });
+        const res = await runWithProxyContext(proxyConfig, () =>
+          fetch(localProvider.baseUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              model: localModel,
+              query: body.query,
+              documents: body.documents,
+              top_n: body.top_n || body.documents.length,
+              return_documents: body.return_documents !== false,
+            }),
+          })
+        );
 
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));

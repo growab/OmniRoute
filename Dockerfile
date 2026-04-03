@@ -11,7 +11,7 @@ COPY scripts/native-binary-compat.mjs ./scripts/native-binary-compat.mjs
 RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
 
 COPY . ./
-RUN mkdir -p /app/data && npm run build -- --webpack
+RUN mkdir -p /app/data && TURBOPACK=0 npm run build
 
 FROM node:22-bookworm-slim AS runner-base
 WORKDIR /app

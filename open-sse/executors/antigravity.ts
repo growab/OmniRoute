@@ -1,6 +1,7 @@
 import crypto, { randomUUID } from "crypto";
 import { BaseExecutor, mergeUpstreamExtraHeaders } from "./base.ts";
 import { PROVIDERS, OAUTH_ENDPOINTS, HTTP_STATUS } from "../config/constants.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
 
 const MAX_RETRY_AFTER_MS = 60_000;
 const LONG_RETRY_THRESHOLD_MS = 60_000;
@@ -130,23 +131,25 @@ export class AntigravityExecutor extends BaseExecutor {
     };
   }
 
-  async refreshCredentials(credentials, log) {
+  async refreshCredentials(credentials, log, proxyConfig = null) {
     if (!credentials.refreshToken) return null;
 
     try {
-      const response = await fetch(OAUTH_ENDPOINTS.google.token, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-        },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          refresh_token: credentials.refreshToken,
-          client_id: this.config.clientId,
-          client_secret: this.config.clientSecret,
-        }),
-      });
+      const response = await runWithProxyContext(proxyConfig, () =>
+        fetch(OAUTH_ENDPOINTS.google.token, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Accept: "application/json",
+          },
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: credentials.refreshToken,
+            client_id: this.config.clientId,
+            client_secret: this.config.clientSecret,
+          }),
+        })
+      );
 
       if (!response.ok) return null;
 
@@ -346,12 +349,14 @@ export class AntigravityExecutor extends BaseExecutor {
       }
 
       try {
-        const response = await fetch(url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(transformedBody),
-          signal,
-        });
+        const response = await runWithProxyContext(proxyConfig, () =>
+          fetch(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(transformedBody),
+            signal,
+          })
+        );
 
         // Parse retry time for 429/503 responses
         let retryMs = null;

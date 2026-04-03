@@ -1,5 +1,6 @@
 import { BaseExecutor } from "./base.ts";
 import { PROVIDERS, OAUTH_ENDPOINTS } from "../config/constants.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
 
 const LOAD_CODE_ASSIST_URL = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
 const PROJECT_TTL_MS = 30_000; // 30 seconds — matches native Gemini CLI
@@ -12,6 +13,8 @@ const projectCache = new Map<string, { projectId: string; expiresAt: number }>()
 const inflightRefresh = new Map<string, Promise<string | null>>();
 
 export class GeminiCLIExecutor extends BaseExecutor {
+  private _currentProxyConfig: any = null;
+
   constructor() {
     super("gemini-cli", PROVIDERS["gemini-cli"]);
   }
@@ -67,21 +70,23 @@ export class GeminiCLIExecutor extends BaseExecutor {
 
       let response;
       try {
-        response = await fetch(LOAD_CODE_ASSIST_URL, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            metadata: {
-              ideType: "IDE_UNSPECIFIED",
-              platform: "PLATFORM_UNSPECIFIED",
-              pluginType: "GEMINI",
+        response = await runWithProxyContext(this._currentProxyConfig, () =>
+          fetch(LOAD_CODE_ASSIST_URL, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
             },
-          }),
-          signal: controller.signal,
-        });
+            body: JSON.stringify({
+              metadata: {
+                ideType: "IDE_UNSPECIFIED",
+                platform: "PLATFORM_UNSPECIFIED",
+                pluginType: "GEMINI",
+              },
+            }),
+            signal: controller.signal,
+          })
+        );
       } finally {
         clearTimeout(timeoutId);
       }
@@ -147,23 +152,35 @@ export class GeminiCLIExecutor extends BaseExecutor {
     return body;
   }
 
-  async refreshCredentials(credentials, log) {
+  async execute(input: any) {
+    // Save proxyConfig for use in _doRefresh (called from transformRequest)
+    this._currentProxyConfig = input.proxyConfig || null;
+    try {
+      return await super.execute(input);
+    } finally {
+      this._currentProxyConfig = null;
+    }
+  }
+
+  async refreshCredentials(credentials, log, proxyConfig = null) {
     if (!credentials.refreshToken) return null;
 
     try {
-      const response = await fetch(OAUTH_ENDPOINTS.google.token, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-        },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          refresh_token: credentials.refreshToken,
-          client_id: this.config.clientId,
-          client_secret: this.config.clientSecret,
-        }),
-      });
+      const response = await runWithProxyContext(proxyConfig, () =>
+        fetch(OAUTH_ENDPOINTS.google.token, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Accept: "application/json",
+          },
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: credentials.refreshToken,
+            client_id: this.config.clientId,
+            client_secret: this.config.clientSecret,
+          }),
+        })
+      );
 
       if (!response.ok) return null;
 

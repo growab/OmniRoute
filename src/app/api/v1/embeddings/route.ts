@@ -22,7 +22,7 @@ import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
 import { v1EmbeddingsSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 
-import { getAllCustomModels, getProviderNodes } from "@/lib/localDb";
+import { getAllCustomModels, getProviderNodes, resolveProxyForProvider } from "@/lib/localDb";
 
 /**
  * Handle CORS preflight
@@ -219,12 +219,16 @@ export async function POST(request) {
     }
   }
 
+  // Resolve proxy config for this provider
+  const proxyConfig = await resolveProxyForProvider(provider).catch(() => null);
+
   const result = await handleEmbedding({
     body,
     credentials,
     log,
     resolvedProvider: providerConfig,
     resolvedModel,
+    proxyConfig,
   });
 
   if (result.success) {

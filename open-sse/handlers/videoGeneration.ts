@@ -16,6 +16,7 @@
  */
 
 import { getVideoProvider, parseVideoModel } from "../config/videoRegistry.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
 import {
   submitComfyWorkflow,
   pollComfyResult,
@@ -27,7 +28,7 @@ import { saveCallLog } from "@/lib/usageDb";
 /**
  * Handle video generation request
  */
-export async function handleVideoGeneration({ body, credentials, log }) {
+export async function handleVideoGeneration({ body, credentials, log, proxyConfig = null }) {
   const { provider, model } = parseVideoModel(body.model);
 
   if (!provider) {
@@ -48,11 +49,25 @@ export async function handleVideoGeneration({ body, credentials, log }) {
   }
 
   if (providerConfig.format === "comfyui") {
-    return handleComfyUIVideoGeneration({ model, provider, providerConfig, body, log });
+    return handleComfyUIVideoGeneration({
+      model,
+      provider,
+      providerConfig,
+      body,
+      log,
+      proxyConfig,
+    });
   }
 
   if (providerConfig.format === "sdwebui-video") {
-    return handleSDWebUIVideoGeneration({ model, provider, providerConfig, body, log });
+    return handleSDWebUIVideoGeneration({
+      model,
+      provider,
+      providerConfig,
+      body,
+      log,
+      proxyConfig,
+    });
   }
 
   return {
@@ -66,7 +81,14 @@ export async function handleVideoGeneration({ body, credentials, log }) {
  * Handle ComfyUI video generation
  * Submits an AnimateDiff or SVD workflow, polls for completion, fetches output video
  */
-async function handleComfyUIVideoGeneration({ model, provider, providerConfig, body, log }) {
+async function handleComfyUIVideoGeneration({
+  model,
+  provider,
+  providerConfig,
+  body,
+  log,
+  proxyConfig = null,
+}) {
   const startTime = Date.now();
   const [width, height] = (body.size || "512x512").split("x").map(Number);
   const frames = body.frames || 16;
@@ -130,8 +152,13 @@ async function handleComfyUIVideoGeneration({ model, provider, providerConfig, b
   }
 
   try {
-    const promptId = await submitComfyWorkflow(providerConfig.baseUrl, workflow);
-    const historyEntry = await pollComfyResult(providerConfig.baseUrl, promptId, 300_000);
+    const promptId = await submitComfyWorkflow(providerConfig.baseUrl, workflow, proxyConfig);
+    const historyEntry = await pollComfyResult(
+      providerConfig.baseUrl,
+      promptId,
+      300_000,
+      proxyConfig
+    );
     const outputFiles = extractComfyOutputFiles(historyEntry);
 
     const videos = [];
@@ -140,7 +167,8 @@ async function handleComfyUIVideoGeneration({ model, provider, providerConfig, b
         providerConfig.baseUrl,
         file.filename,
         file.subfolder,
-        file.type
+        file.type,
+        proxyConfig
       );
       const base64 = Buffer.from(buffer).toString("base64");
       videos.push({ b64_json: base64, format: "webp" });
@@ -179,7 +207,14 @@ async function handleComfyUIVideoGeneration({ model, provider, providerConfig, b
  * Handle SD WebUI video generation via AnimateDiff extension
  * POST to the AnimateDiff API endpoint
  */
-async function handleSDWebUIVideoGeneration({ model, provider, providerConfig, body, log }) {
+async function handleSDWebUIVideoGeneration({
+  model,
+  provider,
+  providerConfig,
+  body,
+  log,
+  proxyConfig = null,
+}) {
   const startTime = Date.now();
   const [width, height] = (body.size || "512x512").split("x").map(Number);
   const url = `${providerConfig.baseUrl}/animatediff/v1/generate`;
@@ -201,11 +236,13 @@ async function handleSDWebUIVideoGeneration({ model, provider, providerConfig, b
   }
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(upstreamBody),
-    });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(upstreamBody),
+      })
+    );
 
     if (!response.ok) {
       const errorText = await response.text();

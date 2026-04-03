@@ -131,10 +131,10 @@ export class DefaultExecutor extends BaseExecutor {
    * Delegates to getAccessToken() which handles all providers with
    * race-condition protection (deduplication via refreshPromiseCache).
    */
-  async refreshCredentials(credentials, log) {
+  async refreshCredentials(credentials, log, proxyConfig = null) {
     if (!credentials.refreshToken) return null;
     try {
-      return await getAccessToken(this.provider, credentials, log);
+      return await getAccessToken(this.provider, credentials, log, proxyConfig);
     } catch (error) {
       log?.error?.("TOKEN", `${this.provider} refresh error: ${error.message}`);
       return null;

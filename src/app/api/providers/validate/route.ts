@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getProviderNodeById } from "@/models";
+import { getProviderNodeById, resolveProxyForProvider } from "@/models";
 import {
   isClaudeCodeCompatibleProvider,
   isOpenAICompatibleProvider,
@@ -57,10 +57,14 @@ export async function POST(request) {
       };
     }
 
+    // Resolve proxy for this provider (provider proxy → global proxy → direct)
+    const proxyConfig = await resolveProxyForProvider(provider);
+
     const result = await validateProviderApiKey({
       provider,
       apiKey,
       providerSpecificData,
+      proxyConfig,
     });
 
     if (result.unsupported) {

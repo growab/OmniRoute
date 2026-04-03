@@ -1,6 +1,7 @@
 import { HTTP_STATUS, FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import { applyFingerprint, isCliCompatEnabled } from "../config/cliFingerprints.ts";
 import { getRotatingApiKey } from "../services/apiKeyRotator.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
 
 /**
  * Sanitizes a custom API path to prevent path traversal attacks.
@@ -60,6 +61,8 @@ export type ExecuteInput = {
   extendedContext?: boolean;
   /** Merged after auth + CLI fingerprint headers (values override same-named defaults). */
   upstreamExtraHeaders?: Record<string, string> | null;
+  /** Proxy configuration for this request (resolved from provider/connection settings). */
+  proxyConfig?: unknown;
 };
 
 /** Apply model-level extra upstream headers (e.g. Authentication, X-Custom-Auth). */
@@ -203,9 +206,14 @@ export class BaseExecutor {
   static readonly RETRY_CONFIG = { maxAttempts: 2, delayMs: 2000 };
 
   // Override in subclass for provider-specific refresh
-  async refreshCredentials(credentials: ProviderCredentials, log: ExecutorLog | null) {
+  async refreshCredentials(
+    credentials: ProviderCredentials,
+    log: ExecutorLog | null,
+    proxyConfig: unknown = null
+  ) {
     void credentials;
     void log;
+    void proxyConfig;
     return null;
   }
 
@@ -290,7 +298,7 @@ export class BaseExecutor {
         };
         if (combinedSignal) fetchOptions.signal = combinedSignal;
 
-        const response = await fetch(url, fetchOptions);
+        const response = await runWithProxyContext(proxyConfig, () => fetch(url, fetchOptions));
 
         // Intra-URL retry: if 429 and we haven't exhausted per-URL retries, wait and retry the same URL
         if (

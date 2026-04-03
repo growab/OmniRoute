@@ -1,5 +1,10 @@
 import { randomUUID } from "crypto";
 import { getCorsOrigin } from "../utils/cors.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
+import { getSpeechProvider, parseSpeechModel } from "../config/audioRegistry.ts";
+import { buildAuthHeaders } from "../config/registryUtils.ts";
+import { errorResponse } from "../utils/error.ts";
+
 /**
  * Audio Speech Handler (TTS)
  *
@@ -16,10 +21,6 @@ import { getCorsOrigin } from "../utils/cors.ts";
  * - Coqui TTS: POST { text, speaker_id } → WAV audio (local, no auth)
  * - Tortoise TTS: POST { text, voice } → audio binary (local, no auth)
  */
-
-import { getSpeechProvider, parseSpeechModel } from "../config/audioRegistry.ts";
-import { buildAuthHeaders } from "../config/registryUtils.ts";
-import { errorResponse } from "../utils/error.ts";
 
 /**
  * Return a CORS error response from an upstream fetch failure
@@ -79,15 +80,17 @@ function isValidPathSegment(segment: string): boolean {
 /**
  * Handle Hyperbolic TTS (returns base64 audio in JSON)
  */
-async function handleHyperbolicSpeech(providerConfig, body, token) {
-  const res = await fetch(providerConfig.baseUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...buildAuthHeaders(providerConfig, token),
-    },
-    body: JSON.stringify({ text: body.input }),
-  });
+async function handleHyperbolicSpeech(providerConfig, body, token, proxyConfig = null) {
+  const res = await runWithProxyContext(proxyConfig, () =>
+    fetch(providerConfig.baseUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...buildAuthHeaders(providerConfig, token),
+      },
+      body: JSON.stringify({ text: body.input }),
+    })
+  );
 
   if (!res.ok) {
     return upstreamErrorResponse(res, await res.text());
@@ -109,18 +112,20 @@ async function handleHyperbolicSpeech(providerConfig, body, token) {
 /**
  * Handle Deepgram TTS (model via query param, Token auth, returns binary audio)
  */
-async function handleDeepgramSpeech(providerConfig, body, modelId, token) {
+async function handleDeepgramSpeech(providerConfig, body, modelId, token, proxyConfig = null) {
   const url = new URL(providerConfig.baseUrl);
   url.searchParams.set("model", modelId);
 
-  const res = await fetch(url.toString(), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...buildAuthHeaders(providerConfig, token),
-    },
-    body: JSON.stringify({ text: body.input }),
-  });
+  const res = await runWithProxyContext(proxyConfig, () =>
+    fetch(url.toString(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...buildAuthHeaders(providerConfig, token),
+      },
+      body: JSON.stringify({ text: body.input }),
+    })
+  );
 
   if (!res.ok) {
     return upstreamErrorResponse(res, await res.text());
@@ -134,7 +139,7 @@ async function handleDeepgramSpeech(providerConfig, body, modelId, token) {
  * POST {baseUrl}/{voice_id} with { text, model_id }
  * voice_id is mapped from the OpenAI `voice` parameter
  */
-async function handleElevenLabsSpeech(providerConfig, body, modelId, token) {
+async function handleElevenLabsSpeech(providerConfig, body, modelId, token, proxyConfig = null) {
   // ElevenLabs uses voice_id in URL path; default to "21m00Tcm4TlvDq8ikWAM" (Rachel)
   const voiceId = body.voice || "21m00Tcm4TlvDq8ikWAM";
   if (!isValidPathSegment(voiceId)) {
@@ -142,17 +147,19 @@ async function handleElevenLabsSpeech(providerConfig, body, modelId, token) {
   }
   const url = `${providerConfig.baseUrl}/${voiceId}`;
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...buildAuthHeaders(providerConfig, token),
-    },
-    body: JSON.stringify({
-      text: body.input,
-      model_id: modelId,
-    }),
-  });
+  const res = await runWithProxyContext(proxyConfig, () =>
+    fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...buildAuthHeaders(providerConfig, token),
+      },
+      body: JSON.stringify({
+        text: body.input,
+        model_id: modelId,
+      }),
+    })
+  );
 
   if (!res.ok) {
     return upstreamErrorResponse(res, await res.text());
@@ -165,19 +172,21 @@ async function handleElevenLabsSpeech(providerConfig, body, modelId, token) {
  * Handle Nvidia NIM TTS
  * POST with { input: { text }, voice, model } → audio binary
  */
-async function handleNvidiaTtsSpeech(providerConfig, body, modelId, token) {
-  const res = await fetch(providerConfig.baseUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...buildAuthHeaders(providerConfig, token),
-    },
-    body: JSON.stringify({
-      input: { text: body.input },
-      voice: body.voice || "default",
-      model: modelId,
-    }),
-  });
+async function handleNvidiaTtsSpeech(providerConfig, body, modelId, token, proxyConfig = null) {
+  const res = await runWithProxyContext(proxyConfig, () =>
+    fetch(providerConfig.baseUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...buildAuthHeaders(providerConfig, token),
+      },
+      body: JSON.stringify({
+        input: { text: body.input },
+        voice: body.voice || "default",
+        model: modelId,
+      }),
+    })
+  );
 
   if (!res.ok) {
     return upstreamErrorResponse(res, await res.text());
@@ -190,20 +199,28 @@ async function handleNvidiaTtsSpeech(providerConfig, body, modelId, token) {
  * Handle HuggingFace Inference TTS
  * POST {baseUrl}/{model_id} with { inputs: text } → audio binary
  */
-async function handleHuggingFaceTtsSpeech(providerConfig, body, modelId, token) {
+async function handleHuggingFaceTtsSpeech(
+  providerConfig,
+  body,
+  modelId,
+  token,
+  proxyConfig = null
+) {
   if (!isValidPathSegment(modelId)) {
     return errorResponse(400, "Invalid model ID");
   }
   const url = `${providerConfig.baseUrl}/${modelId}`;
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...buildAuthHeaders(providerConfig, token),
-    },
-    body: JSON.stringify({ inputs: body.input }),
-  });
+  const res = await runWithProxyContext(proxyConfig, () =>
+    fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...buildAuthHeaders(providerConfig, token),
+      },
+      body: JSON.stringify({ inputs: body.input }),
+    })
+  );
 
   if (!res.ok) {
     return upstreamErrorResponse(res, await res.text());
@@ -217,22 +234,24 @@ async function handleHuggingFaceTtsSpeech(providerConfig, body, modelId, token) 
  * POST { text, voiceId, modelId, audioConfig } → JSON { audioContent: "<base64>" }
  * Docs: https://docs.inworld.ai/api-reference/ttsAPI/texttospeech/synthesize-speech
  */
-async function handleInworldSpeech(providerConfig, body, modelId, token) {
-  const res = await fetch(providerConfig.baseUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Basic ${token}`,
-    },
-    body: JSON.stringify({
-      text: body.input,
-      voiceId: body.voice || undefined,
-      modelId,
-      audioConfig: {
-        audioEncoding: body.response_format === "wav" ? "LINEAR16" : "MP3",
+async function handleInworldSpeech(providerConfig, body, modelId, token, proxyConfig = null) {
+  const res = await runWithProxyContext(proxyConfig, () =>
+    fetch(providerConfig.baseUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Basic ${token}`,
       },
-    }),
-  });
+      body: JSON.stringify({
+        text: body.input,
+        voiceId: body.voice || undefined,
+        modelId,
+        audioConfig: {
+          audioEncoding: body.response_format === "wav" ? "LINEAR16" : "MP3",
+        },
+      }),
+    })
+  );
 
   if (!res.ok) {
     return upstreamErrorResponse(res, await res.text());
@@ -257,26 +276,28 @@ async function handleInworldSpeech(providerConfig, body, modelId, token) {
  * POST { model_id, transcript, voice, output_format } → binary audio bytes
  * Docs: https://docs.cartesia.ai/api-reference/tts/bytes
  */
-async function handleCartesiaSpeech(providerConfig, body, modelId, token) {
+async function handleCartesiaSpeech(providerConfig, body, modelId, token, proxyConfig = null) {
   const outputFormat =
     body.response_format === "wav"
       ? { container: "wav", sample_rate: 44100 }
       : { container: "mp3", bit_rate: 128000, sample_rate: 44100 };
 
-  const res = await fetch(providerConfig.baseUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-Key": token,
-      "Cartesia-Version": "2024-06-10",
-    },
-    body: JSON.stringify({
-      model_id: modelId,
-      transcript: body.input,
-      ...(body.voice ? { voice: { mode: "id", id: body.voice } } : {}),
-      output_format: outputFormat,
-    }),
-  });
+  const res = await runWithProxyContext(proxyConfig, () =>
+    fetch(providerConfig.baseUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": token,
+        "Cartesia-Version": "2024-06-10",
+      },
+      body: JSON.stringify({
+        model_id: modelId,
+        transcript: body.input,
+        ...(body.voice ? { voice: { mode: "id", id: body.voice } } : {}),
+        output_format: outputFormat,
+      }),
+    })
+  );
 
   if (!res.ok) {
     return upstreamErrorResponse(res, await res.text());
@@ -291,28 +312,30 @@ async function handleCartesiaSpeech(providerConfig, body, modelId, token) {
  * Auth: X-USER-ID header (from token string "userId:apiKey")
  * Docs: https://docs.play.ht/reference/api-generate-tts-audio-stream
  */
-async function handlePlayHtSpeech(providerConfig, body, modelId, token) {
+async function handlePlayHtSpeech(providerConfig, body, modelId, token, proxyConfig = null) {
   // PlayHT tokens are stored as "userId:apiKey"
   const [userId, apiKey] = (token || ":").split(":");
 
-  const res = await fetch(providerConfig.baseUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "audio/mpeg",
-      "X-USER-ID": userId || "",
-      Authorization: `Bearer ${apiKey || token}`,
-    },
-    body: JSON.stringify({
-      text: body.input,
-      voice:
-        body.voice ||
-        "s3://voice-cloning-zero-shot/d9ff78ba-d016-47f6-b0ef-dd630f59414e/female-cs/manifest.json",
-      voice_engine: modelId || "PlayDialog",
-      output_format: body.response_format || "mp3",
-      speed: body.speed || 1,
-    }),
-  });
+  const res = await runWithProxyContext(proxyConfig, () =>
+    fetch(providerConfig.baseUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "audio/mpeg",
+        "X-USER-ID": userId || "",
+        Authorization: `Bearer ${apiKey || token}`,
+      },
+      body: JSON.stringify({
+        text: body.input,
+        voice:
+          body.voice ||
+          "s3://voice-cloning-zero-shot/d9ff78ba-d016-47f6-b0ef-dd630f59414e/female-cs/manifest.json",
+        voice_engine: modelId || "PlayDialog",
+        output_format: body.response_format || "mp3",
+        speed: body.speed || 1,
+      }),
+    })
+  );
 
   if (!res.ok) {
     return upstreamErrorResponse(res, await res.text());
@@ -325,15 +348,17 @@ async function handlePlayHtSpeech(providerConfig, body, modelId, token) {
  * Handle Coqui TTS (local, no auth)
  * POST {baseUrl} with { text, speaker_id } → WAV audio
  */
-async function handleCoquiSpeech(providerConfig, body) {
-  const res = await fetch(providerConfig.baseUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      text: body.input,
-      speaker_id: body.voice || undefined,
-    }),
-  });
+async function handleCoquiSpeech(providerConfig, body, proxyConfig = null) {
+  const res = await runWithProxyContext(proxyConfig, () =>
+    fetch(providerConfig.baseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: body.input,
+        speaker_id: body.voice || undefined,
+      }),
+    })
+  );
 
   if (!res.ok) {
     return upstreamErrorResponse(res, await res.text());
@@ -353,15 +378,17 @@ async function handleCoquiSpeech(providerConfig, body) {
  * Handle Tortoise TTS (local, no auth)
  * POST {baseUrl} with { text, voice } → audio binary
  */
-async function handleTortoiseSpeech(providerConfig, body) {
-  const res = await fetch(providerConfig.baseUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      text: body.input,
-      voice: body.voice || "random",
-    }),
-  });
+async function handleTortoiseSpeech(providerConfig, body, proxyConfig = null) {
+  const res = await runWithProxyContext(proxyConfig, () =>
+    fetch(providerConfig.baseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: body.input,
+        voice: body.voice || "random",
+      }),
+    })
+  );
 
   if (!res.ok) {
     return upstreamErrorResponse(res, await res.text());
@@ -391,6 +418,7 @@ export async function handleAudioSpeech({
   credentials,
   resolvedProvider = null,
   resolvedModel = null,
+  proxyConfig = null,
 }) {
   if (!body.model) {
     return errorResponse(400, "model is required");
@@ -426,60 +454,62 @@ export async function handleAudioSpeech({
   try {
     // Route to provider-specific handler
     if (providerConfig.format === "hyperbolic") {
-      return handleHyperbolicSpeech(providerConfig, body, token);
+      return handleHyperbolicSpeech(providerConfig, body, token, proxyConfig);
     }
 
     if (providerConfig.format === "deepgram") {
-      return handleDeepgramSpeech(providerConfig, body, modelId, token);
+      return handleDeepgramSpeech(providerConfig, body, modelId, token, proxyConfig);
     }
 
     if (providerConfig.format === "elevenlabs") {
-      return handleElevenLabsSpeech(providerConfig, body, modelId, token);
+      return handleElevenLabsSpeech(providerConfig, body, modelId, token, proxyConfig);
     }
 
     if (providerConfig.format === "nvidia-tts") {
-      return handleNvidiaTtsSpeech(providerConfig, body, modelId, token);
+      return handleNvidiaTtsSpeech(providerConfig, body, modelId, token, proxyConfig);
     }
 
     if (providerConfig.format === "huggingface-tts") {
-      return handleHuggingFaceTtsSpeech(providerConfig, body, modelId, token);
+      return handleHuggingFaceTtsSpeech(providerConfig, body, modelId, token, proxyConfig);
     }
 
     if (providerConfig.format === "inworld") {
-      return handleInworldSpeech(providerConfig, body, modelId, token);
+      return handleInworldSpeech(providerConfig, body, modelId, token, proxyConfig);
     }
 
     if (providerConfig.format === "cartesia") {
-      return handleCartesiaSpeech(providerConfig, body, modelId, token);
+      return handleCartesiaSpeech(providerConfig, body, modelId, token, proxyConfig);
     }
 
     if (providerConfig.format === "playht") {
-      return handlePlayHtSpeech(providerConfig, body, modelId, token);
+      return handlePlayHtSpeech(providerConfig, body, modelId, token, proxyConfig);
     }
 
     if (providerConfig.format === "coqui") {
-      return handleCoquiSpeech(providerConfig, body);
+      return handleCoquiSpeech(providerConfig, body, proxyConfig);
     }
 
     if (providerConfig.format === "tortoise") {
-      return handleTortoiseSpeech(providerConfig, body);
+      return handleTortoiseSpeech(providerConfig, body, proxyConfig);
     }
 
     // Default: OpenAI-compatible JSON → audio stream proxy (also used by Qwen3)
-    const res = await fetch(providerConfig.baseUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...buildAuthHeaders(providerConfig, token),
-      },
-      body: JSON.stringify({
-        model: modelId,
-        input: body.input,
-        voice: body.voice || "alloy",
-        response_format: body.response_format || "mp3",
-        speed: body.speed || 1.0,
-      }),
-    });
+    const res = await runWithProxyContext(proxyConfig, () =>
+      fetch(providerConfig.baseUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildAuthHeaders(providerConfig, token),
+        },
+        body: JSON.stringify({
+          model: modelId,
+          input: body.input,
+          voice: body.voice || "alloy",
+          response_format: body.response_format || "mp3",
+          speed: body.speed || 1.0,
+        }),
+      })
+    );
 
     if (!res.ok) {
       return upstreamErrorResponse(res, await res.text());

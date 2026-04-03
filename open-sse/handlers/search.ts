@@ -16,6 +16,7 @@ import { randomUUID } from "crypto";
  */
 
 import { getSearchProvider, type SearchProviderConfig } from "../config/searchRegistry.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
 import { saveCallLog } from "@/lib/usageDb";
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -86,6 +87,7 @@ interface SearchHandlerOptions {
   providerOptions?: Record<string, unknown>;
   credentials: Record<string, any>;
   alternateProvider?: string;
+  proxyConfig?: any;
   alternateCredentials?: Record<string, any> | null;
   log?: any;
 }
@@ -482,6 +484,7 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
     alternateProvider,
     alternateCredentials,
     log,
+    proxyConfig,
   } = options;
   const startTime = Date.now();
 
@@ -514,7 +517,14 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
   };
 
   // 4. Try primary provider
-  const result = await tryProvider(primaryConfig, requestParams, credentials, startTime, log);
+  const result = await tryProvider(
+    primaryConfig,
+    requestParams,
+    credentials,
+    startTime,
+    log,
+    proxyConfig
+  );
 
   if (result.success) return result;
 
@@ -537,7 +547,8 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
       requestParams,
       alternateCredentials,
       startTime,
-      log
+      log,
+      proxyConfig
     );
 
     if (fallbackResult.success) return fallbackResult;
@@ -551,7 +562,8 @@ async function tryProvider(
   params: Omit<SearchRequestParams, "token">,
   credentials: Record<string, any>,
   globalStartTime: number,
-  log?: any
+  log?: any,
+  proxyConfig?: any
 ): Promise<SearchHandlerResult> {
   const startTime = Date.now();
   const token = credentials.apiKey || credentials.accessToken;
@@ -578,7 +590,9 @@ async function tryProvider(
   }
 
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch(url, { ...init, signal: controller.signal })
+    );
     clearTimeout(timer);
 
     if (!response.ok) {

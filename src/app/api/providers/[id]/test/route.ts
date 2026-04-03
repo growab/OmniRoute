@@ -305,7 +305,7 @@ async function syncToCloudIfEnabled() {
  * Auto-refreshes token if expired
  * @returns {{ valid: boolean, error: string|null, refreshed: boolean, newTokens: object|null }}
  */
-async function testOAuthConnection(connection: any) {
+async function testOAuthConnection(connection: any, proxyConfig: any = null) {
   const config = OAUTH_TEST_CONFIG[connection.provider];
 
   if (!config) {
@@ -402,10 +402,12 @@ async function testOAuthConnection(connection: any) {
       ...config.extraHeaders,
     };
 
-    const res = await fetch(config.url, {
-      method: config.method,
-      headers,
-    });
+    const res = await runWithProxyContext(proxyConfig, () =>
+      fetch(config.url, {
+        method: config.method,
+        headers,
+      })
+    );
 
     if (res.ok) {
       return {
@@ -430,13 +432,15 @@ async function testOAuthConnection(connection: any) {
       const tokens = await refreshOAuthToken(connection);
       if (tokens) {
         // Retry with new token
-        const retryRes = await fetch(config.url, {
-          method: config.method,
-          headers: {
-            [config.authHeader]: `${config.authPrefix}${tokens.accessToken}`,
-            ...config.extraHeaders,
-          },
-        });
+        const retryRes = await runWithProxyContext(proxyConfig, () =>
+          fetch(config.url, {
+            method: config.method,
+            headers: {
+              [config.authHeader]: `${config.authPrefix}${tokens.accessToken}`,
+              ...config.extraHeaders,
+            },
+          })
+        );
 
         if (retryRes.ok) {
           return {
@@ -495,7 +499,7 @@ async function testOAuthConnection(connection: any) {
 /**
  * Test API key connection
  */
-async function testApiKeyConnection(connection: any) {
+async function testApiKeyConnection(connection: any, proxyConfig: any = null) {
   if (!connection.apiKey) {
     const error = "Missing API key";
     return {
@@ -509,6 +513,7 @@ async function testApiKeyConnection(connection: any) {
     provider: connection.provider,
     apiKey: connection.apiKey,
     providerSpecificData: connection.providerSpecificData,
+    proxyConfig,
   });
 
   if (result.unsupported) {
@@ -590,13 +595,9 @@ export async function testSingleConnection(connectionId: string, validationModel
           },
         }
       : connection;
-    result = await runWithProxyContext(proxyInfo?.proxy || null, () =>
-      testApiKeyConnection(enrichedConnection)
-    );
+    result = await testApiKeyConnection(enrichedConnection, proxyInfo?.proxy || null);
   } else {
-    result = await runWithProxyContext(proxyInfo?.proxy || null, () =>
-      testOAuthConnection(connection)
-    );
+    result = await testOAuthConnection(connection, proxyInfo?.proxy || null);
   }
 
   const latencyMs = Date.now() - startTime;

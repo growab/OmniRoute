@@ -3,6 +3,8 @@ import { validateClaudeCodeCompatibleProvider } from "@/lib/providers/validation
 import { isCcCompatibleProviderEnabled } from "@/shared/utils/featureFlags";
 import { providerNodeValidateSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
+import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
+import { resolveGlobalProxy, resolveProxyForProvider } from "@/lib/localDb";
 
 function sanitizeAnthropicBaseUrl(baseUrl: string) {
   return (baseUrl || "")
@@ -42,6 +44,17 @@ export async function POST(request) {
     }
     const { baseUrl, apiKey, type, compatMode, chatPath, modelsPath } = validation.data;
 
+    // Resolve proxy for manual provider node validation
+    // For manual providers (openai-compatible, anthropic-compatible), we use the provider ID
+    // to resolve proxy settings (provider proxy → global proxy → direct)
+    const providerId =
+      type === "anthropic-compatible"
+        ? compatMode === "cc"
+          ? "cc-compatible"
+          : "anthropic-compatible"
+        : "openai-compatible";
+    const proxyConfig = await resolveProxyForProvider(providerId);
+
     // Anthropic Compatible Validation
     if (type === "anthropic-compatible") {
       if (compatMode === "cc") {
@@ -58,6 +71,7 @@ export async function POST(request) {
             baseUrl: sanitizeClaudeCodeCompatibleBaseUrl(baseUrl),
             chatPath: chatPath || undefined,
           },
+          proxyConfig,
         });
 
         return NextResponse.json({
@@ -74,23 +88,27 @@ export async function POST(request) {
       // Use /models endpoint for validation as many compatible providers support it (like OpenAI)
       const modelsUrl = `${normalizedBase}${modelsPath || "/models"}`;
 
-      const res = await fetch(modelsUrl, {
-        method: "GET",
-        headers: {
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          Authorization: `Bearer ${apiKey}`, // Add Bearer token for hybrid proxies
-        },
-      });
+      const res = await runWithProxyContext(proxyConfig, () =>
+        fetch(modelsUrl, {
+          method: "GET",
+          headers: {
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            Authorization: `Bearer ${apiKey}`, // Add Bearer token for hybrid proxies
+          },
+        })
+      );
 
       return NextResponse.json({ valid: res.ok, error: res.ok ? null : "Invalid API key" });
     }
 
     // OpenAI Compatible Validation (Default)
     const modelsUrl = `${baseUrl.replace(/\/$/, "")}${modelsPath || "/models"}`;
-    const res = await fetch(modelsUrl, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
+    const res = await runWithProxyContext(proxyConfig, () =>
+      fetch(modelsUrl, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      })
+    );
 
     return NextResponse.json({ valid: res.ok, error: res.ok ? null : "Invalid API key" });
   } catch (error) {

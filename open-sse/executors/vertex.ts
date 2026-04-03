@@ -1,6 +1,7 @@
 import { SignJWT, importPKCS8 } from "jose";
 import { BaseExecutor, ExecuteInput } from "./base.ts";
 import { PROVIDERS } from "../config/constants.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
 
 interface ServiceAccount {
   type: string;
@@ -21,7 +22,7 @@ function parseSAFromApiKey(apiKey: string): ServiceAccount {
   }
 }
 
-async function getAccessToken(sa: ServiceAccount): Promise<string> {
+async function getAccessToken(sa: ServiceAccount, proxyConfig: unknown = null): Promise<string> {
   if (!sa.client_email || !sa.private_key) {
     throw new Error(
       "Service Account JSON is missing required fields (client_email or private_key)"
@@ -50,14 +51,16 @@ async function getAccessToken(sa: ServiceAccount): Promise<string> {
     .setProtectedHeader({ alg: "RS256", kid: sa.private_key_id })
     .sign(privateKey);
 
-  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion: jwt,
-    }),
-  });
+  const tokenRes = await runWithProxyContext(proxyConfig, () =>
+    fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        assertion: jwt,
+      }),
+    })
+  );
 
   if (!tokenRes.ok) {
     const errorText = await tokenRes.text();
@@ -105,11 +108,11 @@ export class VertexExecutor extends BaseExecutor {
   }
 
   async execute(input: ExecuteInput) {
-    const { credentials, log } = input;
+    const { credentials, log, proxyConfig } = input;
     if (credentials.apiKey && !credentials.accessToken) {
       try {
         const sa = parseSAFromApiKey(credentials.apiKey);
-        credentials.accessToken = await getAccessToken(sa);
+        credentials.accessToken = await getAccessToken(sa, proxyConfig);
       } catch (err: any) {
         log?.error?.("VERTEX", `Failed to generate JWT token: ${err.message}`);
         throw err;

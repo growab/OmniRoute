@@ -8,6 +8,7 @@ import {
 import { PROVIDERS } from "../config/constants.ts";
 import { v4 as uuidv4 } from "uuid";
 import { refreshKiroToken } from "../services/tokenRefresh.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -100,18 +101,21 @@ export class KiroExecutor extends BaseExecutor {
     signal,
     log,
     upstreamExtraHeaders,
+    proxyConfig,
   }: ExecuteInput) {
     const url = this.buildUrl(model, stream, 0);
     const headers = this.buildHeaders(credentials, stream);
     mergeUpstreamExtraHeaders(headers, upstreamExtraHeaders);
     const transformedBody = await this.transformRequest(model, body, stream, credentials);
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(transformedBody),
-      signal,
-    });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(transformedBody),
+        signal,
+      })
+    );
 
     if (!response.ok) {
       return { response, url, headers, transformedBody };
@@ -479,7 +483,11 @@ export class KiroExecutor extends BaseExecutor {
     });
   }
 
-  async refreshCredentials(credentials: ProviderCredentials, log?: ExecutorLog | null) {
+  async refreshCredentials(
+    credentials: ProviderCredentials,
+    log?: ExecutorLog | null,
+    proxyConfig: unknown = null
+  ) {
     if (!credentials.refreshToken) return null;
 
     try {
@@ -487,7 +495,8 @@ export class KiroExecutor extends BaseExecutor {
       const result = await refreshKiroToken(
         credentials.refreshToken,
         credentials.providerSpecificData,
-        log
+        log,
+        proxyConfig
       );
 
       return result;

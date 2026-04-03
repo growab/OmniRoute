@@ -20,6 +20,7 @@ import {
   type EmbeddingProvider,
 } from "../config/embeddingRegistry.ts";
 import { saveCallLog } from "@/lib/usageDb";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
 
 /**
  * Handle embedding request.
@@ -33,12 +34,14 @@ export async function handleEmbedding({
   log,
   resolvedProvider = null,
   resolvedModel = null,
+  proxyConfig = null,
 }: {
   body: Record<string, unknown>;
   credentials: { apiKey?: string; accessToken?: string } | null;
   log?: { info: (...args: unknown[]) => void; error: (...args: unknown[]) => void };
   resolvedProvider?: EmbeddingProvider | null;
   resolvedModel?: string | null;
+  proxyConfig?: unknown;
 }) {
   // Use pre-resolved provider/model from route handler if available (supports dynamic provider_nodes).
   let provider: string | null;
@@ -129,11 +132,13 @@ export async function handleEmbedding({
   }
 
   try {
-    const response = await fetch(providerConfig.baseUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(upstreamBody),
-    });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch(providerConfig.baseUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(upstreamBody),
+      })
+    );
 
     if (!response.ok) {
       const errorText = await response.text();

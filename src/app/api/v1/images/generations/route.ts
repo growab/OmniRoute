@@ -19,7 +19,7 @@ import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
 import { v1ImageGenerationSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 
-import { getAllCustomModels } from "@/lib/localDb";
+import { getAllCustomModels, resolveProxyForProvider } from "@/lib/localDb";
 
 /**
  * Handle CORS preflight
@@ -182,11 +182,15 @@ export async function POST(request) {
     }
   }
 
+  // Resolve proxy config for this provider
+  const proxyConfig = await resolveProxyForProvider(provider).catch(() => null);
+
   const result = await handleImageGeneration({
     body,
     credentials,
     log,
     ...(isCustomModel && { resolvedProvider: provider }),
+    proxyConfig,
   });
 
   if (result.success) {

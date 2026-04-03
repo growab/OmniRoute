@@ -221,12 +221,12 @@ export class CodexExecutor extends BaseExecutor {
    * have expired or become invalid. chatCore.ts calls this on 401; previously the
    * base class returned null causing the request to fail instead of refreshing.
    */
-  async refreshCredentials(credentials, log) {
+  async refreshCredentials(credentials, log, proxyConfig = null) {
     if (!credentials?.refreshToken) {
       log?.warn?.("TOKEN_REFRESH", "Codex: no refresh token available, re-authentication required");
       return null;
     }
-    const result = await refreshCodexToken(credentials.refreshToken, log);
+    const result = await refreshCodexToken(credentials.refreshToken, log, proxyConfig);
     if (!result || result.error) {
       log?.warn?.(
         "TOKEN_REFRESH",

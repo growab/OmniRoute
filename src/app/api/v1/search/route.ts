@@ -16,6 +16,7 @@ import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
 import { v1SearchSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import { recordCost } from "@/domain/costRules";
+import { resolveProxyForProvider } from "@/lib/localDb";
 import {
   computeCacheKey,
   getOrCoalesce,
@@ -195,6 +196,9 @@ export async function POST(request: Request) {
 
   try {
     const { data: searchResult, cached } = await getOrCoalesce(cacheKey, ttl, async () => {
+      // Resolve proxy config for this provider
+      const proxyConfig = await resolveProxyForProvider(providerConfig.id).catch(() => null);
+
       const result = await handleSearch({
         query: body.query,
         provider: providerConfig.id,
@@ -212,6 +216,7 @@ export async function POST(request: Request) {
         alternateProvider: alternateProviderId,
         alternateCredentials,
         log,
+        proxyConfig,
       });
 
       if (!result.success) {

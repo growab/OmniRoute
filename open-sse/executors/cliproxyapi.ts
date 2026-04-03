@@ -1,5 +1,6 @@
 import { BaseExecutor, mergeUpstreamExtraHeaders, mergeAbortSignals } from "./base.ts";
 import { HTTP_STATUS, FETCH_TIMEOUT_MS } from "../config/constants.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
 
 const DEFAULT_PORT = 8317;
 const DEFAULT_HOST = "127.0.0.1";
@@ -61,6 +62,7 @@ export class CliproxyapiExecutor extends BaseExecutor {
     signal?: AbortSignal | null;
     log?: any;
     upstreamExtraHeaders?: Record<string, string> | null;
+    proxyConfig?: unknown;
   }) {
     const url = this.buildUrl(input.model, input.stream);
     const headers = this.buildHeaders(input.credentials, input.stream);
@@ -77,12 +79,14 @@ export class CliproxyapiExecutor extends BaseExecutor {
       ? mergeAbortSignals(input.signal, timeoutSignal)
       : timeoutSignal;
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(transformedBody),
-      signal: combinedSignal,
-    });
+    const response = await runWithProxyContext(input.proxyConfig, () =>
+      fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(transformedBody),
+        signal: combinedSignal,
+      })
+    );
 
     if (response.status === HTTP_STATUS.RATE_LIMITED) {
       input.log?.warn?.("CPA", `CLIProxyAPI rate limited: ${response.status}`);

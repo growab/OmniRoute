@@ -1,4 +1,13 @@
 import { getCorsOrigin } from "../utils/cors.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
+import {
+  getTranscriptionProvider,
+  parseTranscriptionModel,
+  type AudioProvider,
+} from "../config/audioRegistry.ts";
+import { buildAuthHeaders } from "../config/registryUtils.ts";
+import { errorResponse } from "../utils/error.ts";
+
 /**
  * Audio Transcription Handler
  *
@@ -12,14 +21,6 @@ import { getCorsOrigin } from "../utils/cors.ts";
  * - Nvidia NIM: multipart POST, transform response to { text }
  * - HuggingFace Inference: POST raw binary to /models/{model_id}
  */
-
-import {
-  getTranscriptionProvider,
-  parseTranscriptionModel,
-  type AudioProvider,
-} from "../config/audioRegistry.ts";
-import { buildAuthHeaders } from "../config/registryUtils.ts";
-import { errorResponse } from "../utils/error.ts";
 
 type TranscriptionCredentials = {
   apiKey?: string;
@@ -114,6 +115,7 @@ async function handleDeepgramTranscription(
   file,
   modelId,
   token,
+  proxyConfig = null,
   formData?: FormData
 ) {
   const url = new URL(providerConfig.baseUrl);
@@ -131,14 +133,16 @@ async function handleDeepgramTranscription(
 
   const arrayBuffer = await file.arrayBuffer();
 
-  const res = await fetch(url.toString(), {
-    method: "POST",
-    headers: {
-      ...buildAuthHeaders(providerConfig, token),
-      "Content-Type": resolveAudioContentType(file),
-    },
-    body: arrayBuffer,
-  });
+  const res = await runWithProxyContext(proxyConfig, () =>
+    fetch(url.toString(), {
+      method: "POST",
+      headers: {
+        ...buildAuthHeaders(providerConfig, token),
+        "Content-Type": resolveAudioContentType(file),
+      },
+      body: arrayBuffer,
+    })
+  );
 
   if (!res.ok) {
     return upstreamErrorResponse(res, await res.text());
@@ -159,19 +163,27 @@ async function handleDeepgramTranscription(
 /**
  * Handle AssemblyAI transcription (async: upload file → submit → poll)
  */
-async function handleAssemblyAITranscription(providerConfig, file, modelId, token) {
+async function handleAssemblyAITranscription(
+  providerConfig,
+  file,
+  modelId,
+  token,
+  proxyConfig = null
+) {
   const authHeaders = buildAuthHeaders(providerConfig, token);
 
   // Step 1: Upload the audio file
   const arrayBuffer = await file.arrayBuffer();
-  const uploadRes = await fetch("https://api.assemblyai.com/v2/upload", {
-    method: "POST",
-    headers: {
-      ...authHeaders,
-      "Content-Type": "application/octet-stream",
-    },
-    body: arrayBuffer,
-  });
+  const uploadRes = await runWithProxyContext(proxyConfig, () =>
+    fetch("https://api.assemblyai.com/v2/upload", {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/octet-stream",
+      },
+      body: arrayBuffer,
+    })
+  );
 
   if (!uploadRes.ok) {
     return upstreamErrorResponse(uploadRes, await uploadRes.text());
@@ -180,18 +192,20 @@ async function handleAssemblyAITranscription(providerConfig, file, modelId, toke
   const { upload_url } = await uploadRes.json();
 
   // Step 2: Submit transcription request
-  const submitRes = await fetch(providerConfig.baseUrl, {
-    method: "POST",
-    headers: {
-      ...authHeaders,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      audio_url: upload_url,
-      speech_models: [modelId],
-      language_detection: true,
-    }),
-  });
+  const submitRes = await runWithProxyContext(proxyConfig, () =>
+    fetch(providerConfig.baseUrl, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        audio_url: upload_url,
+        speech_models: [modelId],
+        language_detection: true,
+      }),
+    })
+  );
 
   if (!submitRes.ok) {
     return upstreamErrorResponse(submitRes, await submitRes.text());
@@ -207,7 +221,9 @@ async function handleAssemblyAITranscription(providerConfig, file, modelId, toke
   while (Date.now() - start < maxWait) {
     await new Promise((r) => setTimeout(r, 2000));
 
-    const pollRes = await fetch(pollUrl, { headers: authHeaders });
+    const pollRes = await runWithProxyContext(proxyConfig, () =>
+      fetch(pollUrl, { headers: authHeaders })
+    );
     if (!pollRes.ok) continue;
 
     const result = await pollRes.json();
@@ -231,16 +247,18 @@ async function handleAssemblyAITranscription(providerConfig, file, modelId, toke
  * Handle Nvidia NIM transcription
  * Multipart POST, transform response to { text }
  */
-async function handleNvidiaTranscription(providerConfig, file, modelId, token) {
+async function handleNvidiaTranscription(providerConfig, file, modelId, token, proxyConfig = null) {
   const upstreamForm = new FormData();
   upstreamForm.append("file", file, getUploadedFileName(file));
   upstreamForm.append("model", modelId);
 
-  const res = await fetch(providerConfig.baseUrl, {
-    method: "POST",
-    headers: buildAuthHeaders(providerConfig, token),
-    body: upstreamForm,
-  });
+  const res = await runWithProxyContext(proxyConfig, () =>
+    fetch(providerConfig.baseUrl, {
+      method: "POST",
+      headers: buildAuthHeaders(providerConfig, token),
+      body: upstreamForm,
+    })
+  );
 
   if (!res.ok) {
     return upstreamErrorResponse(res, await res.text());
@@ -257,21 +275,29 @@ async function handleNvidiaTranscription(providerConfig, file, modelId, token) {
  * Handle HuggingFace Inference transcription
  * POST raw binary audio to {baseUrl}/{model_id}, returns { text }
  */
-async function handleHuggingFaceTranscription(providerConfig, file, modelId, token) {
+async function handleHuggingFaceTranscription(
+  providerConfig,
+  file,
+  modelId,
+  token,
+  proxyConfig = null
+) {
   if (!isValidPathSegment(modelId)) {
     return errorResponse(400, "Invalid model ID");
   }
   const url = `${providerConfig.baseUrl}/${modelId}`;
   const arrayBuffer = await file.arrayBuffer();
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      ...buildAuthHeaders(providerConfig, token),
-      "Content-Type": resolveAudioContentType(file),
-    },
-    body: arrayBuffer,
-  });
+  const res = await runWithProxyContext(proxyConfig, () =>
+    fetch(url, {
+      method: "POST",
+      headers: {
+        ...buildAuthHeaders(providerConfig, token),
+        "Content-Type": resolveAudioContentType(file),
+      },
+      body: arrayBuffer,
+    })
+  );
 
   if (!res.ok) {
     return upstreamErrorResponse(res, await res.text());
@@ -297,11 +323,13 @@ export async function handleAudioTranscription({
   credentials,
   resolvedProvider = null,
   resolvedModel = null,
+  proxyConfig = null,
 }: {
   formData: FormData;
   credentials?: TranscriptionCredentials | null;
   resolvedProvider?: AudioProvider | null;
   resolvedModel?: string | null;
+  proxyConfig?: unknown;
 }): Promise<Response> {
   const model = formData.get("model");
   if (typeof model !== "string" || !model) {
@@ -339,19 +367,19 @@ export async function handleAudioTranscription({
 
   // Route to provider-specific handler
   if (providerConfig.format === "deepgram") {
-    return handleDeepgramTranscription(providerConfig, file, modelId, token, formData);
+    return handleDeepgramTranscription(providerConfig, file, modelId, token, proxyConfig, formData);
   }
 
   if (providerConfig.format === "assemblyai") {
-    return handleAssemblyAITranscription(providerConfig, file, modelId, token);
+    return handleAssemblyAITranscription(providerConfig, file, modelId, token, proxyConfig);
   }
 
   if (providerConfig.format === "nvidia-asr") {
-    return handleNvidiaTranscription(providerConfig, file, modelId, token);
+    return handleNvidiaTranscription(providerConfig, file, modelId, token, proxyConfig);
   }
 
   if (providerConfig.format === "huggingface-asr") {
-    return handleHuggingFaceTranscription(providerConfig, file, modelId, token);
+    return handleHuggingFaceTranscription(providerConfig, file, modelId, token, proxyConfig);
   }
 
   // Default: OpenAI/Groq/Qwen3-compatible multipart proxy
@@ -374,11 +402,13 @@ export async function handleAudioTranscription({
   }
 
   try {
-    const res = await fetch(providerConfig.baseUrl, {
-      method: "POST",
-      headers: buildAuthHeaders(providerConfig, token),
-      body: upstreamForm,
-    });
+    const res = await runWithProxyContext(proxyConfig, () =>
+      fetch(providerConfig.baseUrl, {
+        method: "POST",
+        headers: buildAuthHeaders(providerConfig, token),
+        body: upstreamForm,
+      })
+    );
 
     if (!res.ok) {
       return upstreamErrorResponse(res, await res.text());

@@ -1,12 +1,13 @@
 import { getCorsOrigin } from "../utils/cors.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
+import { getModerationProvider, parseModerationModel } from "../config/moderationRegistry.ts";
+import { errorResponse } from "../utils/error.ts";
+
 /**
  * Moderation Handler
  *
  * Handles POST /v1/moderations (OpenAI Moderations API format).
  */
-
-import { getModerationProvider, parseModerationModel } from "../config/moderationRegistry.ts";
-import { errorResponse } from "../utils/error.ts";
 
 /**
  * Handle moderation request
@@ -17,7 +18,7 @@ import { errorResponse } from "../utils/error.ts";
  * @returns {Response}
  */
 /** @returns {Promise<unknown>} */
-export async function handleModeration({ body, credentials }) {
+export async function handleModeration({ body, credentials, proxyConfig = null }) {
   if (!body.input) {
     return errorResponse(400, "input is required");
   }
@@ -40,17 +41,19 @@ export async function handleModeration({ body, credentials }) {
   }
 
   try {
-    const res = await fetch(providerConfig.baseUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        model: modelId,
-        input: body.input,
-      }),
-    });
+    const res = await runWithProxyContext(proxyConfig, () =>
+      fetch(providerConfig.baseUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          model: modelId,
+          input: body.input,
+        }),
+      })
+    );
 
     if (!res.ok) {
       const errText = await res.text();

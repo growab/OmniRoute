@@ -631,3 +631,29 @@ export async function resolveProxyForProvider(providerId: string) {
 
   return null;
 }
+
+/**
+ * Resolve global proxy only.
+ * Used for manual provider node validation where provider ID is not yet known.
+ */
+export async function resolveGlobalProxy() {
+  const db = getDbInstance();
+
+  const globalAssignment = db
+    .prepare(
+      "SELECT p.id, p.type, p.host, p.port, p.username, p.password FROM proxy_assignments a JOIN proxy_registry p ON p.id = a.proxy_id WHERE a.scope = 'global' LIMIT 1"
+    )
+    .get();
+  if (globalAssignment) {
+    const record = toRecord(globalAssignment);
+    return {
+      type: record.type,
+      host: record.host,
+      port: record.port,
+      username: record.username,
+      password: record.password,
+    };
+  }
+
+  return null;
+}

@@ -1120,6 +1120,10 @@ export async function handleChatCore({
 
   // Get executor for this provider (with optional upstream proxy routing)
   const executor = await resolveExecutorWithProxy(provider);
+
+  // Resolve proxy configuration for this connection (provider proxy → global proxy → direct)
+  const proxyConfig = connectionId ? await safeResolveProxy(connectionId) : null;
+
   const getExecutionCredentials = () => {
     const nextCredentials = nativeCodexPassthrough
       ? { ...credentials, requestEndpointPath: endpointPath }
@@ -1179,6 +1183,7 @@ export async function handleChatCore({
             log,
             extendedContext,
             upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
+            proxyConfig,
           });
 
           // Qwen 429 strict quota backoff (wait 1.5s, 3s and retry)
@@ -1310,7 +1315,7 @@ export async function handleChatCore({
     providerResponse.status === HTTP_STATUS.FORBIDDEN
   ) {
     const newCredentials = (await refreshWithRetry(
-      () => executor.refreshCredentials(credentials, log),
+      () => executor.refreshCredentials(credentials, log, proxyConfig),
       3,
       log
     )) as null | {
@@ -1342,6 +1347,7 @@ export async function handleChatCore({
           log,
           extendedContext,
           upstreamExtraHeaders: buildUpstreamHeadersForExecute(retryModelId),
+          proxyConfig,
         });
 
         if (retryResult.response.ok) {
@@ -1600,6 +1606,8 @@ export async function handleChatCore({
           // Build a minimal fallback request using the original body but with
           // the NVIDIA free-tier model and max_tokens capped to avoid overuse.
           const fbExecutor = getExecutor(fbDecision.provider);
+          // Resolve proxy for fallback provider (use global proxy as fallback provider has no connection)
+          const fbProxyConfig = await safeResolveProxy(connectionId || "");
           const fbResult = await fbExecutor.execute({
             model: fbDecision.model,
             body: {
@@ -1617,6 +1625,7 @@ export async function handleChatCore({
             signal: streamController.signal,
             log,
             extendedContext,
+            proxyConfig: fbProxyConfig,
           });
           if (fbResult.response.ok) {
             providerResponse = fbResult.response;

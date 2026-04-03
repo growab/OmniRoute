@@ -18,7 +18,7 @@ import {
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
-import { getProviderNodes } from "@/lib/localDb";
+import { getProviderNodes, resolveProxyForProvider } from "@/lib/localDb";
 
 /**
  * Handle CORS preflight
@@ -110,11 +110,15 @@ export async function POST(request) {
     }
   }
 
+  // Resolve proxy config for this provider
+  const proxyConfig = await resolveProxyForProvider(provider).catch(() => null);
+
   const response = await handleAudioTranscription({
     formData,
     credentials,
     resolvedProvider: providerConfig,
     resolvedModel,
+    proxyConfig,
   });
   if (response?.ok) {
     await clearRecoveredProviderState(credentials);

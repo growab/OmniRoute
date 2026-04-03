@@ -4,6 +4,7 @@
 
 import { PROVIDERS } from "../config/constants.ts";
 import { safePercentage } from "@/shared/utils/formatting";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
 
 // GitHub API config
 const GITHUB_CONFIG = {
@@ -110,12 +111,14 @@ async function getGlmUsage(apiKey: string, providerSpecificData?: Record<string,
   const region = providerSpecificData?.apiRegion || "international";
   const quotaUrl = GLM_QUOTA_URLS[region] || GLM_QUOTA_URLS.international;
 
-  const res = await fetch(quotaUrl, {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      Accept: "application/json",
-    },
-  });
+  const res = await runWithProxyContext(proxyConfig, () =>
+    fetch(quotaUrl, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: "application/json",
+      },
+    })
+  );
 
   if (!res.ok) {
     if (res.status === 401) throw new Error("Invalid API key");

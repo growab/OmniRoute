@@ -1,13 +1,14 @@
 import { getCorsOrigin } from "../utils/cors.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
+import { getRerankProvider, parseRerankModel } from "../config/rerankRegistry.ts";
+import { errorResponse } from "../utils/error.ts";
+
 /**
  * Rerank Handler
  *
  * Handles /v1/rerank requests following the Cohere rerank API format.
  * Routes to the appropriate provider based on the model prefix or lookup.
  */
-
-import { getRerankProvider, parseRerankModel } from "../config/rerankRegistry.ts";
-import { errorResponse } from "../utils/error.ts";
 
 /**
  * Build authorization header for a rerank provider
@@ -78,6 +79,7 @@ export async function handleRerank({
   top_n,
   return_documents,
   credentials,
+  proxyConfig = null,
 }) {
   if (!model) return errorResponse(400, "model is required");
   if (!query) return errorResponse(400, "query is required");
@@ -109,14 +111,16 @@ export async function handleRerank({
   });
 
   try {
-    const res = await fetch(providerConfig.baseUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...buildAuthHeader(providerConfig, token),
-      },
-      body: JSON.stringify(requestBody),
-    });
+    const res = await runWithProxyContext(proxyConfig, () =>
+      fetch(providerConfig.baseUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildAuthHeader(providerConfig, token),
+        },
+        body: JSON.stringify(requestBody),
+      })
+    );
 
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));

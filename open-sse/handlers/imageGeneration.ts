@@ -17,6 +17,7 @@ import { randomUUID } from "crypto";
  */
 
 import { getImageProvider, parseImageModel } from "../config/imageRegistry.ts";
+import { runWithProxyContext } from "../utils/proxyFetch.ts";
 import { mapImageSize } from "../translator/image/sizeMapper.ts";
 import { saveCallLog } from "@/lib/usageDb";
 import {
@@ -34,7 +35,13 @@ import {
  * @param {object} options.log - Logger
  * @param {string} [options.resolvedProvider] - Pre-resolved provider ID (from route layer custom model resolution)
  */
-export async function handleImageGeneration({ body, credentials, log, resolvedProvider = null }) {
+export async function handleImageGeneration({
+  body,
+  credentials,
+  log,
+  resolvedProvider = null,
+  proxyConfig = null,
+}) {
   let provider, model;
 
   if (resolvedProvider) {
@@ -131,6 +138,7 @@ export async function handleImageGeneration({ body, credentials, log, resolvedPr
       body,
       credentials,
       log,
+      proxyConfig,
     });
   }
 
@@ -139,7 +147,14 @@ export async function handleImageGeneration({ body, credentials, log, resolvedPr
   }
 
   if (providerConfig.format === "comfyui") {
-    return handleComfyUIImageGeneration({ model, provider, providerConfig, body, log });
+    return handleComfyUIImageGeneration({
+      model,
+      provider,
+      providerConfig,
+      body,
+      log,
+      proxyConfig,
+    });
   }
 
   return handleOpenAIImageGeneration({ model, provider, providerConfig, body, credentials, log });
@@ -194,11 +209,13 @@ async function handleGeminiImageGeneration({ model, providerConfig, body, creden
   }
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(geminiBody),
-    });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(geminiBody),
+      })
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -345,7 +362,8 @@ async function handleOpenAIImageGeneration({
     headers,
     requestBody,
     provider,
-    log
+    log,
+    proxyConfig
   );
 
   // Fallback for providers with fallbackUrl (e.g., Nebius)
@@ -362,7 +380,8 @@ async function handleOpenAIImageGeneration({
       headers,
       requestBody,
       provider,
-      log
+      log,
+      proxyConfig
     );
   }
 
@@ -390,13 +409,15 @@ async function handleOpenAIImageGeneration({
 /**
  * Fetch a single image endpoint and normalize response
  */
-async function fetchImageEndpoint(url, headers, body, provider, log) {
+async function fetchImageEndpoint(url, headers, body, provider, log, proxyConfig = null) {
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body,
-    });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch(url, {
+        method: "POST",
+        headers,
+        body,
+      })
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -463,14 +484,16 @@ async function handleHyperbolicImageGeneration({
   }
 
   try {
-    const response = await fetch(providerConfig.baseUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(upstreamBody),
-    });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch(providerConfig.baseUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(upstreamBody),
+      })
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -537,6 +560,7 @@ async function handleNanoBananaImageGeneration({
   body,
   credentials,
   log,
+  proxyConfig = null,
 }) {
   const startTime = Date.now();
   const token = credentials.apiKey || credentials.accessToken;
@@ -588,14 +612,16 @@ async function handleNanoBananaImageGeneration({
   }
 
   try {
-    const submitResp = await fetch(submitUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(upstreamBody),
-    });
+    const submitResp = await runWithProxyContext(proxyConfig, () =>
+      fetch(submitUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(upstreamBody),
+      })
+    );
 
     if (!submitResp.ok) {
       const errorText = await submitResp.text();
@@ -688,10 +714,12 @@ async function handleNanoBananaImageGeneration({
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
-      const pollResp = await fetch(`${statusUrl}?taskId=${encodeURIComponent(taskId)}`, {
-        method: "GET",
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const pollResp = await runWithProxyContext(proxyConfig, () =>
+        fetch(`${statusUrl}?taskId=${encodeURIComponent(taskId)}`, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${token}` },
+        })
+      );
 
       if (!pollResp.ok) {
         const errorText = await pollResp.text();
@@ -710,7 +738,7 @@ async function handleNanoBananaImageGeneration({
 
       const successFlag = Number(taskData?.successFlag);
       if (successFlag === 1) {
-        const normalized = await normalizeNanoBananaTaskResult(taskData, body, log);
+        const normalized = await normalizeNanoBananaTaskResult(taskData, body, log, proxyConfig);
 
         saveCallLog({
           method: "POST",
@@ -802,7 +830,7 @@ function normalizeNanoBananaSyncPayload(data, prompt) {
   return { data: images.filter(Boolean) };
 }
 
-async function normalizeNanoBananaTaskResult(taskData, body, log) {
+async function normalizeNanoBananaTaskResult(taskData, body, log, proxyConfig = null) {
   const response = taskData?.response || {};
 
   const urlCandidates = [
@@ -840,7 +868,7 @@ async function normalizeNanoBananaTaskResult(taskData, body, log) {
 
     if (urlCandidates.length > 0) {
       const firstUrl = urlCandidates[0];
-      const resp = await fetch(firstUrl);
+      const resp = await runWithProxyContext(proxyConfig, () => fetch(firstUrl));
       if (!resp.ok) {
         throw new Error(`Failed to fetch NanoBanana result image URL (${resp.status})`);
       }
@@ -920,11 +948,13 @@ async function handleSDWebUIImageGeneration({ model, provider, providerConfig, b
   }
 
   try {
-    const response = await fetch(providerConfig.baseUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(upstreamBody),
-    });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch(providerConfig.baseUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(upstreamBody),
+      })
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -984,7 +1014,14 @@ async function handleSDWebUIImageGeneration({ model, provider, providerConfig, b
  * Handle ComfyUI image generation (local, no auth)
  * Submits a txt2img workflow, polls for completion, fetches output
  */
-async function handleComfyUIImageGeneration({ model, provider, providerConfig, body, log }) {
+async function handleComfyUIImageGeneration({
+  model,
+  provider,
+  providerConfig,
+  body,
+  log,
+  proxyConfig = null,
+}) {
   const startTime = Date.now();
   const [width, height] = (body.size || "1024x1024").split("x").map(Number);
 
@@ -1037,8 +1074,13 @@ async function handleComfyUIImageGeneration({ model, provider, providerConfig, b
   }
 
   try {
-    const promptId = await submitComfyWorkflow(providerConfig.baseUrl, workflow);
-    const historyEntry = await pollComfyResult(providerConfig.baseUrl, promptId);
+    const promptId = await submitComfyWorkflow(providerConfig.baseUrl, workflow, proxyConfig);
+    const historyEntry = await pollComfyResult(
+      providerConfig.baseUrl,
+      promptId,
+      120_000,
+      proxyConfig
+    );
     const outputFiles = extractComfyOutputFiles(historyEntry);
 
     const images = [];
@@ -1047,7 +1089,8 @@ async function handleComfyUIImageGeneration({ model, provider, providerConfig, b
         providerConfig.baseUrl,
         file.filename,
         file.subfolder,
-        file.type
+        file.type,
+        proxyConfig
       );
       const base64 = Buffer.from(buffer).toString("base64");
       images.push({ b64_json: base64, revised_prompt: body.prompt });
@@ -1130,14 +1173,16 @@ async function handleImagen3ImageGeneration({
   }
 
   try {
-    const response = await fetch(providerConfig.baseUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(upstreamBody),
-    });
+    const response = await runWithProxyContext(proxyConfig, () =>
+      fetch(providerConfig.baseUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(upstreamBody),
+      })
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
