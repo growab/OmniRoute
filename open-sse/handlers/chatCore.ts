@@ -646,18 +646,36 @@ export async function handleChatCore({
   // Primary path: merge client model id + alias target so config on either key applies; resolved
   // id wins on same header name. T5 family fallback uses only (nextModel, resolveModelAlias(next))
   // so A-model headers are not sent to B — see buildUpstreamHeadersForExecute.
+  const connectionCustomUserAgent =
+    credentials?.providerSpecificData &&
+    typeof credentials.providerSpecificData === "object" &&
+    typeof credentials.providerSpecificData.customUserAgent === "string"
+      ? credentials.providerSpecificData.customUserAgent.trim()
+      : "";
+
   const buildUpstreamHeadersForExecute = (modelToCall: string): Record<string, string> => {
-    if (modelToCall === effectiveModel) {
-      return {
-        ...getModelUpstreamExtraHeaders(provider || "", model || "", sourceFormat),
-        ...getModelUpstreamExtraHeaders(provider || "", resolvedModel || "", sourceFormat),
-      };
+    const upstreamHeaders =
+      modelToCall === effectiveModel
+        ? {
+            ...getModelUpstreamExtraHeaders(provider || "", model || "", sourceFormat),
+            ...getModelUpstreamExtraHeaders(provider || "", resolvedModel || "", sourceFormat),
+          }
+        : (() => {
+            const r = resolveModelAlias(modelToCall);
+            return {
+              ...getModelUpstreamExtraHeaders(provider || "", modelToCall || "", sourceFormat),
+              ...getModelUpstreamExtraHeaders(provider || "", r || "", sourceFormat),
+            };
+          })();
+
+    if (connectionCustomUserAgent) {
+      upstreamHeaders["User-Agent"] = connectionCustomUserAgent;
+      if ("user-agent" in upstreamHeaders) {
+        upstreamHeaders["user-agent"] = connectionCustomUserAgent;
+      }
     }
-    const r = resolveModelAlias(modelToCall);
-    return {
-      ...getModelUpstreamExtraHeaders(provider || "", modelToCall || "", sourceFormat),
-      ...getModelUpstreamExtraHeaders(provider || "", r || "", sourceFormat),
-    };
+
+    return upstreamHeaders;
   };
 
   // Default to false unless client explicitly sets stream: true (OpenAI spec compliant)
@@ -1322,11 +1340,37 @@ export async function handleChatCore({
     console.log(`${COLORS.red}[ERROR] ${failureMessage}${COLORS.reset}`);
     return createErrorResult(HTTP_STATUS.BAD_GATEWAY, failureMessage);
   }
+  // We need to peek at the error text if it's 400 for Qwen
+  let upstreamErrorParsed = false;
+  let parsedStatusCode = providerResponse.status;
+  let parsedMessage = "";
+  let parsedRetryAfterMs: number | null = null;
+  let upstreamErrorBody: unknown = null;
 
-  // Handle 401/403 - try token refresh using executor
+  if (provider === "qwen" && providerResponse.status === HTTP_STATUS.BAD_REQUEST) {
+    const errorDetails = await parseUpstreamError(providerResponse, provider);
+    parsedStatusCode = errorDetails.statusCode;
+    parsedMessage = errorDetails.message;
+    parsedRetryAfterMs = errorDetails.retryAfterMs;
+    upstreamErrorBody = errorDetails.responseBody;
+    upstreamErrorParsed = true;
+  }
+
+  const isQwenExpiredError =
+    provider === "qwen" &&
+    parsedStatusCode === HTTP_STATUS.BAD_REQUEST &&
+    parsedMessage &&
+    (parsedMessage.toLowerCase().includes("session has expired") ||
+      parsedMessage.toLowerCase().includes("invalid_parameter_error"));
+
+  const streamOptionsOnlyFailed = false; // TODO: properly track stream options failure? (placeholder from existing logic)
+
+  // Handle 401/403 (and Qwen explicit expiration) - try token refresh using executor
   if (
-    providerResponse.status === HTTP_STATUS.UNAUTHORIZED ||
-    providerResponse.status === HTTP_STATUS.FORBIDDEN
+    (providerResponse.status === HTTP_STATUS.UNAUTHORIZED ||
+      providerResponse.status === HTTP_STATUS.FORBIDDEN ||
+      isQwenExpiredError) &&
+    !streamOptionsOnlyFailed // Keep constraint if stream options failed originally
   ) {
     const newCredentials = (await refreshWithRetry(
       () => executor.refreshCredentials(credentials, log, proxyConfig),
@@ -1370,6 +1414,10 @@ export async function handleChatCore({
           providerHeaders = retryResult.headers;
           finalBody = retryResult.transformedBody;
           reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
+          upstreamErrorParsed = false; // Reset since new response is OK
+        } else {
+          providerResponse = retryResult.response;
+          upstreamErrorParsed = false; // Let it be parsed downstream
         }
       } catch {
         log?.warn?.("TOKEN", `${provider.toUpperCase()} | retry after refresh failed`);
@@ -1384,12 +1432,22 @@ export async function handleChatCore({
   // Check provider response - return error info for fallback handling
   if (!providerResponse.ok) {
     trackPendingRequest(model, provider, connectionId, false);
-    const {
-      statusCode,
-      message,
-      retryAfterMs,
-      responseBody: upstreamErrorBody,
-    } = await parseUpstreamError(providerResponse, provider);
+
+    let statusCode = providerResponse.status;
+    let message = "";
+    let retryAfterMs: number | null = null;
+
+    if (upstreamErrorParsed) {
+      statusCode = parsedStatusCode;
+      message = parsedMessage;
+      retryAfterMs = parsedRetryAfterMs;
+    } else {
+      const details = await parseUpstreamError(providerResponse, provider);
+      statusCode = details.statusCode;
+      message = details.message;
+      retryAfterMs = details.retryAfterMs;
+      upstreamErrorBody = details.responseBody;
+    }
 
     // T06/T10/T36: classify provider errors and persist terminal account states.
     const errorType = classifyProviderError(statusCode, message);
