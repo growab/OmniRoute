@@ -1,6 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
-import { getProviderConnectionById } from "@/lib/localDb";
+import { getProviderConnectionById, resolveProxyForConnection } from "@/lib/localDb";
 import { createBackup } from "@/shared/services/backupService";
 import { getCliConfigPaths } from "@/shared/services/cliRuntime";
 import {
@@ -209,15 +209,24 @@ async function resolveFreshCodexConnection(connectionId: string): Promise<CodexC
     );
   }
 
-  const refreshed = await getAccessToken("codex", {
-    connectionId,
-    accessToken: connection.accessToken,
-    refreshToken,
-    expiresAt: connection.expiresAt,
-    expiresIn: connection.expiresIn,
-    idToken: connection.idToken,
-    providerSpecificData: connection.providerSpecificData,
-  });
+  // Resolve proxy configuration for this connection
+  const resolved = await resolveProxyForConnection(connectionId).catch(() => null);
+  const proxyConfig = resolved?.proxy || null;
+
+  const refreshed = await getAccessToken(
+    "codex",
+    {
+      connectionId,
+      accessToken: connection.accessToken,
+      refreshToken,
+      expiresAt: connection.expiresAt,
+      expiresIn: connection.expiresIn,
+      idToken: connection.idToken,
+      providerSpecificData: connection.providerSpecificData,
+    },
+    console,
+    proxyConfig
+  );
 
   if (isUnrecoverableRefreshError(refreshed)) {
     throw new CodexAuthFileError(

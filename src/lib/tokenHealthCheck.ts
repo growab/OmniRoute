@@ -10,7 +10,12 @@
  * updates the DB, and logs the result.
  */
 
-import { getProviderConnections, updateProviderConnection, getSettings } from "@/lib/localDb";
+import {
+  getProviderConnections,
+  updateProviderConnection,
+  getSettings,
+  resolveProxyForConnection,
+} from "@/lib/localDb";
 import {
   getAccessToken,
   supportsTokenRefresh,
@@ -222,17 +227,36 @@ async function checkConnection(conn) {
   };
 
   const hideLogs = await shouldHideLogs();
-  const result = await getAccessToken(conn.provider, credentials, {
-    info: (tag, msg) => {
-      if (!hideLogs) console.log(`${LOG_PREFIX} [${tag}] ${msg}`);
+
+  // Resolve proxy configuration for this connection (provider proxy → global proxy → direct)
+  let proxyConfig = null;
+  try {
+    const resolved = await resolveProxyForConnection(conn.id);
+    proxyConfig = resolved?.proxy || null;
+  } catch (proxyErr: any) {
+    if (!hideLogs) {
+      console.warn(
+        `${LOG_PREFIX} Failed to resolve proxy for ${conn.provider}: ${proxyErr.message}`
+      );
+    }
+  }
+
+  const result = await getAccessToken(
+    conn.provider,
+    credentials,
+    {
+      info: (tag, msg) => {
+        if (!hideLogs) console.log(`${LOG_PREFIX} [${tag}] ${msg}`);
+      },
+      warn: (tag, msg) => {
+        if (!hideLogs) console.warn(`${LOG_PREFIX} [${tag}] ${msg}`);
+      },
+      error: (tag, msg, extra) => {
+        if (!hideLogs) console.error(`${LOG_PREFIX} [${tag}] ${msg}`, extra || "");
+      },
     },
-    warn: (tag, msg) => {
-      if (!hideLogs) console.warn(`${LOG_PREFIX} [${tag}] ${msg}`);
-    },
-    error: (tag, msg, extra) => {
-      if (!hideLogs) console.error(`${LOG_PREFIX} [${tag}] ${msg}`, extra || "");
-    },
-  });
+    proxyConfig
+  );
 
   const now = new Date().toISOString();
 

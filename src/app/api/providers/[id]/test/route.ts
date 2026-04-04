@@ -256,7 +256,7 @@ async function getProviderRuntimeStatus(connection: any) {
  * @returns {object} { accessToken, expiresIn, refreshToken } or null if failed
  */
 async function refreshOAuthToken(connection: any) {
-  const { provider, refreshToken } = connection;
+  const { provider, refreshToken, id } = connection;
   if (!refreshToken) return null;
 
   try {
@@ -266,7 +266,11 @@ async function refreshOAuthToken(connection: any) {
       providerSpecificData: connection.providerSpecificData || {},
     };
 
-    const result = await getAccessToken(provider, credentials, console);
+    // Resolve proxy configuration for this connection
+    const resolved = await resolveProxyForConnection(id).catch(() => null);
+    const proxyConfig = resolved?.proxy || null;
+
+    const result = await getAccessToken(provider, credentials, console, proxyConfig);
     return result; // { accessToken, expiresIn, refreshToken } or null
   } catch (err) {
     console.log(`Error refreshing ${provider} token:`, (err as any).message);

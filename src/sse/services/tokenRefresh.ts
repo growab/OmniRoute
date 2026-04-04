@@ -132,7 +132,10 @@ export async function checkAndRefreshToken(provider: string, credentials: any) {
         expiresIn: Math.round((expiresAt - now) / 1000),
       });
 
-      const newCredentials = await getAccessToken(provider, updatedCredentials);
+      // Resolve proxy for this provider
+      const proxy = await resolveProxyForProvider(provider);
+
+      const newCredentials = await getAccessToken(provider, updatedCredentials, log, proxy);
       if (newCredentials && newCredentials.accessToken) {
         await updateProviderCredentials(updatedCredentials.connectionId, newCredentials);
 

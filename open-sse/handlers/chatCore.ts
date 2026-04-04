@@ -47,6 +47,7 @@ import {
   getModelPreserveOpenAIDeveloperRole,
   getModelUpstreamExtraHeaders,
   getUpstreamProxyConfig,
+  resolveProxyForConnection,
 } from "@/lib/localDb";
 import { getExecutor } from "../executors/index.ts";
 import { getCacheControlSettings } from "@/lib/cacheControlSettings";
@@ -553,6 +554,19 @@ export async function handleChatCore({
   const targetFormat = modelTargetFormat || getTargetFormat(provider);
   const noLogEnabled = apiKeyInfo?.noLog === true;
   const detailedLoggingEnabled = !noLogEnabled && (await isDetailedLoggingEnabled());
+
+  // Helper function to safely resolve proxy configuration for a connection
+  const safeResolveProxy = async (connId: string) => {
+    try {
+      const resolved = await resolveProxyForConnection(connId);
+      return resolved?.proxy || null;
+    } catch (proxyErr: unknown) {
+      const message = proxyErr instanceof Error ? proxyErr.message : String(proxyErr);
+      log?.debug?.("PROXY", `Failed to resolve proxy: ${message}`);
+      return null;
+    }
+  };
+
   const persistAttemptLogs = ({
     status,
     tokens,

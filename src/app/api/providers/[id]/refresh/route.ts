@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getProviderConnectionById } from "@/models";
+import { resolveProxyForConnection } from "@/lib/localDb";
 import { getAccessToken, updateProviderCredentials } from "@/sse/services/tokenRefresh";
 
 /**
@@ -44,9 +45,13 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       providerSpecificData: connection.providerSpecificData,
     };
 
+    // Resolve proxy configuration for this connection
+    const resolved = await resolveProxyForConnection(id).catch(() => null);
+    const proxyConfig = resolved?.proxy || null;
+
     // Use the existing getAccessToken helper which knows how to refresh
     // tokens for each provider type (Claude, GitHub, Gemini, etc.)
-    const newCredentials = await getAccessToken(provider, credentials);
+    const newCredentials = await getAccessToken(provider, credentials, console, proxyConfig);
 
     if (!newCredentials?.accessToken) {
       return NextResponse.json(
