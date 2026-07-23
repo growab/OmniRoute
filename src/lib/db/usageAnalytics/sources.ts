@@ -103,6 +103,7 @@ export function buildUnifiedSource(opts: BuildUnifiedSourceOptions): UnifiedSour
           success,
           latency_ms,
           connection_id,
+          account_key,
           api_key_id,
           api_key_name,
           1 as requests
@@ -122,6 +123,7 @@ export function buildUnifiedSource(opts: BuildUnifiedSourceOptions): UnifiedSour
           1 as success,
           NULL as latency_ms,
           NULL as connection_id,
+          NULL as account_key,
           NULL as api_key_id,
           NULL as api_key_name,
           total_requests as requests
@@ -133,7 +135,7 @@ export function buildUnifiedSource(opts: BuildUnifiedSourceOptions): UnifiedSour
           tokens_input, tokens_output,
           tokens_cache_read, tokens_cache_creation, tokens_reasoning,
           service_tier, success, latency_ms,
-          connection_id, api_key_id, api_key_name,
+          connection_id, account_key, api_key_id, api_key_name,
           1 as requests
         FROM usage_history
         ${rawWhere}

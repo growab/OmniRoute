@@ -9,8 +9,8 @@ const distDir = process.env.NEXT_DIST_DIR || ".build/next";
 const projectRoot = dirname(fileURLToPath(import.meta.url));
 const scriptSrc =
   process.env.NODE_ENV === "development"
-    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:"
-    : "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:";
+    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://static.cloudflareinsights.com"
+    : "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://static.cloudflareinsights.com";
 const contentSecurityPolicy = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -128,9 +128,23 @@ const nextConfig = {
     // expected diagnostic — suppress it here rather than fight the analyzer,
     // mirroring the isNextIntlExtractorDynamicImportWarning precedent below
     // for the webpack path. (#6582)
+    // open-sse/services/compression/ruleLoader.ts and
+    // .../engines/rtk/filterLoader.ts both define an identical
+    // getModuleDir() helper that walks up directories via
+    // path.resolve(anchor) + fs.existsSync(...) in a loop with a
+    // non-literal argument — the same dynamic-path fs access pattern as
+    // the agentSkills case above, but not covered by that narrower
+    // allowlist glob, so the "Overly broad patterns..." warning kept
+    // firing (610 times, once per entry point transitively importing the
+    // compression module). Same known-benign, bounded fs access;
+    // suppressed here rather than fought. (#7051, follow-up to #6582)
     ignoreIssue: [
       {
         path: "**/src/lib/agentSkills/**",
+        description: /Overly broad patterns can lead to build performance issues/,
+      },
+      {
+        path: "**/open-sse/services/compression/**",
         description: /Overly broad patterns can lead to build performance issues/,
       },
     ],
@@ -224,6 +238,10 @@ const nextConfig = {
     "thread-stream",
     "pino-abstract-transport",
     "better-sqlite3",
+    // sql.js WASM is resolved at runtime via createRequire(); Next's static
+    // analysis can't follow _require.resolve("sql.js/package.json") and spams
+    // build warnings.  Externalizing silences them without changing behaviour.
+    "sql.js",
     // sqlite-vec ships a native vec0.so loaded at runtime via createRequire().
     // Turbopack otherwise tries to bundle the .so and fails with "Unknown module
     // type"; externalizing it keeps the require at runtime (like better-sqlite3).
